@@ -2,6 +2,12 @@
 
 本地元器件库存管理工具 —— 数据就是 Excel，所见即所得，AI 帮你录入，BOM 一键匹配取出。
 
+[![Release](https://img.shields.io/github/v/release/Tuang-Gaashuan/parts-warehouse)](https://github.com/Tuang-Gaashuan/parts-warehouse/releases/latest)
+[![License](https://img.shields.io/github/license/Tuang-Gaashuan/parts-warehouse)](LICENSE)
+
+> ⬇️ **下载安装包**：[https://github.com/Tuang-Gaashuan/parts-warehouse/releases/latest](https://github.com/Tuang-Gaashuan/parts-warehouse/releases/latest)
+> （单文件版 exe 303MB / 完整版 zip 310MB，均为 Windows 双击即用）
+
 - **数据就是 Excel**：每个一级分类一个 `.xlsx`，无数据库，用 WPS/Excel 直接打开
 - **AI 加持但非必须**：一句话描述自动入库、BOM 批量解析；纯规则解析离线也能干
 - **36 个一级分类 / 585 个子分类**：参考立创商城商品分类，覆盖常见电子元器件
