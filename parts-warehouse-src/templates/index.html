@@ -1,0 +1,771 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>元器件仓库</title>
+<link rel="icon" type="image/x-icon" href="/static/favicon.ico">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<!-- 背景图层 (z-index -2, 在 body 纯色背景之上、遮罩之下) -->
+<div id="bgLayer"></div>
+
+<!-- 顶部栏 -->
+<header>
+  <div class="logo" onclick="goHome()" style="cursor:pointer">
+    <div class="logo-icon">⚡</div>
+    <span>元器件仓库</span>
+  </div>
+  <div class="header-actions" id="headerActions">
+    <button class="btn btn-ghost" id="btnAIConfig" onclick="openAIConfig()" title="设置">⚙️ 设置</button>
+    <button class="btn btn-ghost" id="btnUndo" onclick="openUndoModal()" title="撤回最近的操作">↩️ 撤回</button>
+    <input type="text" id="searchBox" placeholder="搜索元器件…" style="display:none">
+    <button class="btn btn-dark" id="btnNew" style="display:none" onclick="addRow()">+ 新增行</button>
+    <button class="btn btn-blue" id="btnAI" style="display:none" onclick="openAIModal()">✦ AI 填入</button>
+    <button class="btn btn-green" id="btnSave" style="display:none" onclick="saveCategory()">保存</button>
+    <button class="btn btn-ghost" id="btnMerge" style="display:none" onclick="mergeSubcat()" title="合并 名称/品牌/封装/规格 完全相同的重复行">🔀 合并重复</button>
+    <button class="btn btn-green" id="btnAddStock" style="display:none" onclick="openStockModal('add')">＋ 增加库存</button>
+    <button class="btn btn-orange" id="btnWithdrawStock" style="display:none" onclick="openStockModal('withdraw')">📤 取出</button>
+    <button class="btn btn-back" id="btnBack" style="display:none" onclick="goBack()">‹ 返回</button>
+  </div>
+</header>
+
+<!-- 面包屑 -->
+<div class="crumbs" id="crumbs" style="display:none"></div>
+
+<!-- 内容区 -->
+<main>
+  <!-- 首页: 浏览仪表盘 -->
+  <section id="homePage">
+    <div class="home-layout">
+      <!-- 左: 存入/使用滚轮 -->
+      <div class="home-left">
+        <div class="panel-title">📜 存入 · 使用记录</div>
+        <div class="wheel" id="logWheel">
+          <div class="wheel-placeholder">暂无操作记录</div>
+        </div>
+      </div>
+
+      <!-- 右: 最多种类 + 统计卡片 + 装饰 + 入口 -->
+      <div class="home-right">
+        <!-- 最多元器件种类 -->
+        <div class="top-cat" id="topCat">
+          <span class="top-cat-label">🏆 最多的元器件种类</span>
+          <span class="top-cat-name" id="topCatName">-</span>
+        </div>
+
+        <div class="stat-grid" id="statGrid">
+          <div class="stat-card">
+            <div class="stat-num" id="statCategories">-</div>
+            <div class="stat-label">一级分类</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-num" id="statSubcats">-</div>
+            <div class="stat-label">子分类</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-num" id="statItems">-</div>
+            <div class="stat-label">条目数</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-num" id="statQty">-</div>
+            <div class="stat-label">总数量</div>
+          </div>
+        </div>
+
+        <!-- 装饰图片 (可在设置中自定义/隐藏) -->
+        <div class="deco-row">
+          <img src="/static/deco_parts.png" class="deco-img" id="decoImg1" alt="装饰图1">
+          <img src="/static/deco_circuit.png" class="deco-img" id="decoImg2" alt="装饰图2">
+        </div>
+
+        <!-- 三大入口 -->
+        <div class="entry-row">
+          <div class="entry-btn" id="entryCat" onclick="goCategories()">
+            <div class="entry-icon">🗂️</div>
+            <div class="entry-text">分类界面</div>
+          </div>
+          <div class="entry-btn" id="entryInput" onclick="goInput()">
+            <div class="entry-icon">📥</div>
+            <div class="entry-text">录入界面</div>
+          </div>
+          <div class="entry-btn" id="entryWithdraw" onclick="goWithdraw()">
+            <div class="entry-icon">📤</div>
+            <div class="entry-text">取出元件</div>
+          </div>
+          <div class="entry-btn" id="entryBomMatch" onclick="goBomMatch()">
+            <div class="entry-icon">🧮</div>
+            <div class="entry-text">BOM匹配</div>
+          </div>
+          <div class="entry-btn" id="entryStock" onclick="goLowStock()">
+            <div class="entry-icon">🚨</div>
+            <div class="entry-text">补货提醒</div>
+            <div class="entry-badge" id="lowStockBadge" style="display:none">0</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 分类界面 (第1级: 一级分类卡片) -->
+  <section id="overviewPage" style="display:none">
+    <div class="overview-head">
+      <h1>分类总览</h1>
+      <span class="total-badge" id="totalBadge">加载中…</span>
+    </div>
+    <div class="card-grid" id="cardGrid"></div>
+  </section>
+
+  <!-- 子分类列表 (第2级) -->
+  <section id="subcatPage" style="display:none">
+    <div class="detail-head">
+      <h2 id="subcatTitle">分类</h2>
+      <span class="count-badge" id="subcatCount"></span>
+    </div>
+    <div class="card-grid" id="subcatGrid"></div>
+  </section>
+
+  <!-- 子分类元器件表格 (第3级) -->
+  <section id="detailPage" style="display:none">
+    <div class="detail-head">
+      <h2 id="detailTitle">子分类</h2>
+      <span class="count-badge" id="detailCount"></span>
+      <span class="owner-badge" id="detailOwners"></span>
+    </div>
+    <div class="table-wrap">
+      <table id="dataTable">
+        <thead id="tableHead"></thead>
+        <tbody id="tableBody"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- 补货提醒界面 -->
+  <section id="lowstockPage" style="display:none">
+    <div class="detail-head">
+      <h2>🚨 补货提醒</h2>
+      <span class="count-badge" id="lowstockCount"></span>
+    </div>
+    <div class="table-wrap">
+      <table id="lowstockTable">
+        <thead><tr><th>数量</th><th>元器件</th><th>子分类</th><th>操作</th></tr></thead>
+        <tbody id="lowstockBody"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- 未分类界面 (手动归类) -->
+  <section id="unclassifiedPage" style="display:none">
+    <div class="detail-head">
+      <h2>📥 未分类元件</h2>
+      <span class="count-badge" id="uncatCount"></span>
+    </div>
+    <div class="uncat-tools">
+      <span class="uncat-hint">批量导入时未识别出分类的元件都在这里，选择分类后归类入库：</span>
+      <select id="uncatCatSel" onchange="onUncatCatChange()"><option value="">— 选择一级分类 —</option></select>
+      <select id="uncatSubcatSel"><option value="">— 选择子分类 —</option></select>
+      <button class="btn btn-blue" onclick="assignUnclassified()">✔ 归类所选</button>
+    </div>
+    <div class="table-wrap">
+      <table id="uncatTable">
+        <thead><tr>
+          <th style="width:32px"><input type="checkbox" id="uncatCheckAll" onchange="toggleUncatAll(this)"></th>
+          <th>名称/型号</th><th>品牌</th><th>封装</th><th>数量</th><th>规格参数</th><th>来源描述</th>
+        </tr></thead>
+        <tbody id="uncatBody"></tbody>
+      </table>
+    </div>
+    <div class="ai-status" id="uncatStatus"></div>
+  </section>
+
+  <!-- 取出界面 (出库) -->
+  <section id="withdrawPage" style="display:none">
+    <div class="detail-head">
+      <h2>📤 取出元器件</h2>
+      <span class="count-badge" id="wdCount"></span>
+    </div>
+
+    <div class="tabs">
+      <div class="tab active" id="wdTabManual" onclick="switchWdTab('manual')">📋 手动选择</div>
+      <div class="tab" id="wdTabImport" onclick="switchWdTab('import')">📥 导入BOM取出</div>
+    </div>
+
+    <!-- 手动选择面板 -->
+    <div id="wdPanelManual">
+      <div class="uncat-tools">
+        <span class="uncat-hint">选择分类后勾选要取出的元件并填写数量，确认后库存自动扣减并记录：</span>
+        <select id="wdCatSel" onchange="onWdCatChange()"><option value="">— 选择一级分类 —</option></select>
+        <select id="wdSubcatSel" onchange="onWdSubcatChange()"><option value="">— 选择子分类 —</option></select>
+      </div>
+      <div class="table-wrap">
+        <table id="wdTable">
+          <thead><tr>
+            <th style="width:32px"><input type="checkbox" id="wdCheckAll" onchange="toggleWdAll(this)"></th>
+            <th>名称/型号</th><th>品牌</th><th>封装</th><th>当前数量</th><th>取出数量</th><th>规格参数</th>
+          </tr></thead>
+          <tbody id="wdBody"></tbody>
+        </table>
+      </div>
+      <div class="wd-actions">
+        <button class="btn btn-orange" onclick="doWithdraw()">📤 确认取出</button>
+      </div>
+      <div class="ai-status" id="wdStatus"></div>
+    </div>
+
+    <!-- 导入BOM取出面板 -->
+    <div id="wdPanelImport" style="display:none">
+      <div class="tabs2">
+        <div class="tab2 active" id="wdTabPaste" onclick="switchWdImpMode('paste')">📋 粘贴文本</div>
+        <div class="tab2" id="wdTabFile" onclick="switchWdImpMode('file')">📄 上传 Excel/txt</div>
+      </div>
+
+      <div id="wdPastePanel">
+        <div class="input-panel">
+          <div class="input-field">
+            <label>粘贴 BOM 清单（每行一条，或一段混合文本）</label>
+            <textarea id="wdBomText" rows="6" placeholder='例如:
+100个 100nF 0402 贴片电容
+20个 10KΩ 0402 电阻
+5个 MM1Z20 SOD-123 稳压二极管'></textarea>
+          </div>
+          <div class="input-actions">
+            <button class="btn btn-blue" onclick="wdParseText()">🔍 AI 解析并匹配库存</button>
+            <button class="btn btn-ghost" onclick="wdParseTextRules()" title="纯规则解析, 不消耗 AI 额度">⚙️ 脚本解析并匹配</button>
+          </div>
+          <div class="ai-status" id="wdParseStatus"></div>
+        </div>
+      </div>
+
+      <div id="wdFilePanel" style="display:none">
+        <div class="input-panel">
+          <div class="input-field">
+            <label>选择 BOM 文件（Excel .xlsx 或 txt）</label>
+            <input type="file" id="wdBomFile" accept=".xlsx,.xls,.txt" onchange="wdFileSelected()">
+            <div class="file-hint" id="wdFileHint">导入后自动解析并匹配现有库存，耐压/品牌不同的会列出供你选择替换</div>
+          </div>
+          <div class="input-actions">
+            <button class="btn btn-blue" onclick="wdParseFile()">🔍 AI 解析并匹配</button>
+            <button class="btn btn-ghost" onclick="wdParseFileRules()" title="纯规则解析, 不消耗 AI 额度">⚙️ 脚本解析并匹配</button>
+          </div>
+          <div class="ai-status" id="wdFileStatus"></div>
+        </div>
+      </div>
+
+      <!-- 匹配结果 -->
+      <div id="wdMatchResult" style="display:none">
+        <div class="detail-head">
+          <h3>匹配结果</h3>
+          <span class="count-badge" id="wdMatchCount"></span>
+          <button class="btn btn-orange" onclick="wdConfirm()">📤 确认取出所选</button>
+        </div>
+        <div class="table-wrap">
+          <table id="wdMatchTable">
+            <thead><tr><th>需求元件</th><th>封装</th><th>需数量</th><th style="min-width:360px">选择库存（替换料，选一个）</th><th>库存情况</th></tr></thead>
+            <tbody id="wdMatchBody"></tbody>
+          </table>
+        </div>
+        <div id="wdNoStock" style="margin-top:14px">
+          <h4 style="color:#dc2626;margin-bottom:8px">❌ 无库存的元件（需要采购）</h4>
+          <div class="table-wrap">
+            <table id="wdNoStockTable">
+              <thead><tr><th>元件</th><th>规格</th><th>封装</th><th>需数量</th></tr></thead>
+              <tbody id="wdNoStockBody"></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="ai-status" id="wdMatchStatus"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- BOM 匹配界面 (只读, 不扣数量) -->
+  <section id="bomMatchPage" style="display:none">
+    <div class="detail-head">
+      <h2>🧮 BOM 匹配</h2>
+      <span class="count-badge" id="bmCount"></span>
+    </div>
+    <div class="uncat-tools">
+      <span class="uncat-hint">粘贴或上传 BOM 清单，系统自动在仓库中匹配对应元件（含相似替换料）并提醒库存是否充足。只读检查，不影响库存数量：</span>
+    </div>
+    <div class="tabs2">
+      <div class="tab2 active" id="bmTabPaste" onclick="switchBmMode('paste')">📋 粘贴文本</div>
+      <div class="tab2" id="bmTabFile" onclick="switchBmMode('file')">📄 上传 Excel/txt</div>
+    </div>
+
+    <div id="bmPastePanel">
+      <div class="input-panel">
+        <div class="input-field">
+          <label>粘贴 BOM 清单（每行一条，或一段混合文本）</label>
+          <textarea id="bmBomText" rows="6" placeholder='例如:
+100个 100nF 0402 贴片电容
+20个 10KΩ 0402 电阻
+5个 MM1Z20 SOD-123 稳压二极管'></textarea>
+        </div>
+        <div class="input-actions">
+          <button class="btn btn-blue" onclick="bmParseText()">🔍 AI 解析并匹配</button>
+          <button class="btn btn-ghost" onclick="bmParseTextRules()" title="纯规则解析, 不消耗 AI 额度">⚙️ 脚本解析并匹配</button>
+        </div>
+        <div class="ai-status" id="bmParseStatus"></div>
+      </div>
+    </div>
+
+    <div id="bmFilePanel" style="display:none">
+      <div class="input-panel">
+        <div class="input-field">
+          <label>选择 BOM 文件（Excel .xlsx 或 txt）</label>
+          <input type="file" id="bmBomFile" accept=".xlsx,.xls,.txt" onchange="bmFileSelected()">
+          <div class="file-hint" id="bmFileHint">导入后自动解析并匹配现有库存，只读检查不扣数量</div>
+        </div>
+        <div class="input-actions">
+          <button class="btn btn-blue" onclick="bmParseFile()">🔍 AI 解析并匹配</button>
+          <button class="btn btn-ghost" onclick="bmParseFileRules()" title="纯规则解析, 不消耗 AI 额度">⚙️ 脚本解析并匹配</button>
+        </div>
+        <div class="ai-status" id="bmFileStatus"></div>
+      </div>
+    </div>
+
+    <!-- 匹配结果 -->
+    <div id="bmResult" style="display:none">
+      <div class="detail-head">
+        <h3>匹配结果</h3>
+        <span class="count-badge" id="bmMatchCount"></span>
+      </div>
+      <div class="table-wrap">
+        <table id="bmTable">
+          <thead><tr><th>需求元件</th><th>封装</th><th>需数量</th><th style="min-width:340px">匹配库存（相似元件）</th><th>库存情况</th></tr></thead>
+          <tbody id="bmBody"></tbody>
+        </table>
+      </div>
+      <div id="bmNeedBuy" style="margin-top:14px">
+        <h4 style="color:#dc2626;margin-bottom:8px">🛒 需要采购的元件（缺料或不足）</h4>
+        <div class="table-wrap">
+          <table id="bmNeedBuyTable">
+            <thead><tr><th>元件</th><th>规格</th><th>封装</th><th>需数量</th><th>库存情况</th></tr></thead>
+            <tbody id="bmNeedBuyBody"></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="ai-status" id="bmStatus"></div>
+    </div>
+  </section>
+
+  <!-- 录入界面 -->
+  <section id="inputPage" style="display:none">
+    <div class="detail-head">
+      <h2>📥 元器件录入</h2>
+    </div>
+
+    <!-- Tab 切换: 单条 AI / 批量导入 / 图片识别 -->
+    <div class="tabs">
+      <div class="tab active" id="tabSingle" onclick="switchInputTab('single')">✦ 单条 AI 录入</div>
+      <div class="tab" id="tabBatch" onclick="switchInputTab('batch')">📦 批量导入</div>
+      <div class="tab" id="tabOcr" onclick="switchInputTab('ocr')">📷 图片识别</div>
+    </div>
+
+    <!-- 单条 AI 录入 -->
+    <div id="inputSinglePanel">
+      <div class="input-panel">
+        <div class="input-field">
+          <label>选择一级分类</label>
+          <select id="inputCatSelect"></select>
+        </div>
+        <div class="input-field">
+          <label>选择子分类</label>
+          <select id="inputSubcatSelect"></select>
+        </div>
+        <div class="input-field">
+          <label>元器件描述（AI 自动解析）</label>
+          <textarea id="inputDesc" rows="2" placeholder='例如: 100个 0805 10K ±1% 贴片电阻 富信'></textarea>
+        </div>
+        <div class="input-actions">
+          <button class="btn btn-blue" onclick="quickAIFill()">✦ AI 解析填入</button>
+          <button class="btn btn-dark" onclick="openSubcatFromInput()">打开该分类表格</button>
+        </div>
+        <div class="ai-status" id="inputStatus"></div>
+      </div>
+    </div>
+
+    <!-- 批量导入 -->
+    <div id="inputBatchPanel" style="display:none">
+      <div class="tabs2">
+        <div class="tab2 active" id="tabPaste" onclick="switchBatchMode('paste')">📋 粘贴文本</div>
+        <div class="tab2" id="tabFile" onclick="switchBatchMode('file')">📄 上传 Excel/txt</div>
+      </div>
+
+      <!-- 粘贴文本 -->
+      <div id="batchPastePanel">
+        <div class="input-panel">
+          <div class="input-field">
+            <label>粘贴元器件清单（每行一条，或一段混合文本）</label>
+            <textarea id="batchText" rows="8" placeholder='例如:
+100个 0805 10K ±1% 贴片电阻 富信
+50个 SS34 SMA 肖特基二极管
+20片 STM32F103C8T6 LQFP48 MCU
+30个 100nF 50V X7R 0603 村田电容'></textarea>
+          </div>
+          <div class="input-actions">
+            <button class="btn btn-blue" onclick="batchParseText()">🔍 AI 解析</button>
+            <button class="btn btn-ghost" onclick="batchParseTextRules()" title="纯规则解析, 不消耗 AI 额度">⚙️ 脚本解析</button>
+          </div>
+          <div class="ai-status" id="batchPasteStatus"></div>
+        </div>
+      </div>
+
+      <!-- 上传文件 -->
+      <div id="batchFilePanel" style="display:none">
+        <div class="input-panel">
+          <div class="input-field">
+            <label>选择 Excel (.xlsx) 或 txt 文件</label>
+            <input type="file" id="batchFile" accept=".xlsx,.xls,.txt" onchange="batchFileSelected()">
+            <div class="file-hint" id="batchFileHint">支持 BOM 表（位号/型号/规格/数量/品牌/封装 等任意表头），AI 自动识别列含义</div>
+          </div>
+          <div class="input-actions">
+            <button class="btn btn-blue" id="btnBatchParseFile" onclick="batchParseFile()">🔍 AI 解析</button>
+            <button class="btn btn-ghost" onclick="batchParseFileRules()" title="纯规则解析, 不消耗 AI 额度">⚙️ 脚本解析</button>
+          </div>
+          <div class="ai-status" id="batchFileStatus"></div>
+        </div>
+      </div>
+
+      <!-- 解析结果确认区 -->
+      <div id="batchResult" style="display:none">
+        <div class="detail-head">
+          <h3>解析结果</h3>
+          <span class="count-badge" id="batchResultCount"></span>
+          <button class="btn btn-green" style="padding:5px 16px" onclick="batchCommit()">✔ 确认写入仓库</button>
+        </div>
+        <div class="table-wrap">
+          <table id="batchResultTable">
+            <thead><tr>
+              <th style="width:32px"><input type="checkbox" id="batchCheckAll" onchange="toggleBatchAll(this)"></th>
+              <th>名称/型号</th><th>品牌</th><th>封装</th><th>数量</th><th>规格参数</th><th>归属分类</th><th>子分类</th>
+            </tr></thead>
+            <tbody id="batchResultBody"></tbody>
+          </table>
+        </div>
+        <div class="ai-status" id="batchCommitStatus"></div>
+      </div>
+    </div>
+
+    <!-- 图片识别 (OCR) -->
+    <div id="inputOcrPanel" style="display:none">
+      <div class="input-panel">
+        <div class="input-actions" style="margin-bottom:14px">
+          <button class="btn btn-dark" onclick="cameraCapture()">📷 摄像头拍照识别</button>
+          <select id="cameraSelect" class="form-select" style="width:auto;display:inline-block;margin-left:8px;vertical-align:middle">
+            <option value="-1">正在检测摄像头…</option>
+          </select>
+          <button class="btn btn-ghost btn-sm" onclick="loadCameraList(true)" title="重新检测摄像头" style="margin-left:4px;vertical-align:middle">🔄 重新检测</button>
+          <span id="cameraHint" class="file-hint" style="margin-left:8px"></span>
+        </div>
+        <div class="file-hint" style="margin:-8px 0 14px 0">操作：空格=拍照，Backspace=撤回最近一张，回车=结束，ESC=取消；照片拍完自动识别，缓存立即删除</div>
+        <div class="input-field">
+          <label>或上传图片（可多选：料袋标签 / 元器件照片 / BOM 截图）</label>
+          <input type="file" id="ocrFile" accept=".png,.jpg,.jpeg,.webp,.bmp" multiple onchange="ocrUpload()">
+          <div class="file-hint">支持一次选择多张图片批量识别，识别结果合并后按模板整理</div>
+        </div>
+        <div class="ocr-preview" id="ocrPreview" style="display:none"><img id="ocrPreviewImg" alt="预览"></div>
+        <div class="input-field">
+          <label>识别出的文字（可编辑后解析）</label>
+          <textarea id="ocrText" rows="6" placeholder="识别结果将显示在这里…"></textarea>
+        </div>
+        <div class="input-actions">
+          <button class="btn btn-blue" onclick="ocrParse()">🔍 识别文字 → AI 解析</button>
+        </div>
+        <div class="ai-status" id="ocrStatus"></div>
+      </div>
+
+      <!-- OCR 解析结果确认区 -->
+      <div id="ocrResult" style="display:none">
+        <div class="detail-head">
+          <h3>解析结果</h3>
+          <span class="count-badge" id="ocrResultCount"></span>
+          <button class="btn btn-green" style="padding:5px 16px" onclick="ocrCommit()">✔ 确认写入仓库</button>
+        </div>
+        <div class="table-wrap">
+          <table id="ocrResultTable">
+            <thead><tr>
+              <th style="width:32px"><input type="checkbox" id="ocrCheckAll" onchange="toggleOcrAll(this)"></th>
+              <th>名称/型号</th><th>品牌</th><th>封装</th><th>数量</th><th>规格参数</th><th>归属分类</th><th>子分类</th>
+            </tr></thead>
+            <tbody id="ocrResultBody"></tbody>
+          </table>
+        </div>
+        <div class="ai-status" id="ocrCommitStatus"></div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<!-- 状态提示 -->
+<div class="toast" id="toast"></div>
+
+<!-- AI 填入弹窗 -->
+<div class="modal-mask" id="aiModal" style="display:none">
+  <div class="modal">
+    <h3>✦ AI 快速填入 <span id="aiCatName"></span></h3>
+    <p class="hint">描述元器件，例如：<code>100个 0805 10K ±1% 贴片电阻 富信</code></p>
+    <textarea id="aiInput" placeholder="在这里输入元器件描述…" rows="3"></textarea>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="closeAIModal()">取消</button>
+      <button class="btn btn-blue" id="aiSubmitBtn" onclick="aiFill()">解析并填入</button>
+    </div>
+    <div class="ai-status" id="aiStatus"></div>
+  </div>
+</div>
+
+<!-- 撤回弹窗 -->
+<div class="modal-mask" id="undoModal" style="display:none">
+  <div class="modal">
+    <h3>↩️ 撤回操作</h3>
+    <p class="hint">选择要撤回的操作，数据将恢复到该操作之前（可连续撤回）</p>
+    <div class="undo-list" id="undoList"></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="closeUndoModal()">关闭</button>
+    </div>
+    <div class="ai-status" id="undoStatus"></div>
+  </div>
+</div>
+
+<!-- 库存操作弹窗 (表格页: 增加/取出) -->
+<div class="modal-mask" id="stockModal" style="display:none">
+  <div class="modal">
+    <h3 id="stockModalTitle">库存操作</h3>
+    <p class="hint" id="stockModalHint"></p>
+    <div class="input-field">
+      <label>数量</label>
+      <input type="number" id="stockQty" min="1" style="width:100%;border:1px solid var(--border);border-radius:10px;padding:10px 14px;font-size:14px;font-family:inherit;background:var(--input-bg);color:var(--text);outline:none">
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="closeStockModal()">取消</button>
+      <button class="btn btn-blue" id="stockConfirmBtn" onclick="doStockAction()">确认</button>
+    </div>
+    <div class="ai-status" id="stockStatus"></div>
+  </div>
+</div>
+
+<!-- 设置弹窗 (数据路径 / AI / 界面) -->
+<div class="modal-mask" id="aiConfigModal" style="display:none">
+  <div class="modal modal-lg">
+    <h3>⚙️ 设置</h3>
+
+    <!-- 设置 Tab -->
+    <div class="tabs2">
+      <div class="tab2 active" id="setTabPath" onclick="switchSetTab('path')">📁 数据路径</div>
+      <div class="tab2" id="setTabAI" onclick="switchSetTab('ai')">🤖 AI 设置</div>
+      <div class="tab2" id="setTabUI" onclick="switchSetTab('ui')">🎨 界面设置</div>
+      <div class="tab2" id="setTabData" onclick="switchSetTab('data')">🗑 数据管理</div>
+    </div>
+
+    <!-- Tab1: 数据路径 -->
+    <div id="setPanelPath">
+      <div class="input-field">
+        <label>元器件数据保存路径</label>
+        <div class="dir-row">
+          <input type="text" id="setDataDir" placeholder="留空 = 使用默认 data/ 目录">
+          <button class="btn btn-ghost" onclick="browseDataDir()">📁 浏览…</button>
+        </div>
+        <div class="file-hint" id="setDataDirHint"></div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-blue" onclick="saveDataDir()">保存路径</button>
+      </div>
+      <div class="ai-status" id="setPathStatus"></div>
+    </div>
+
+    <!-- Tab2: AI 设置 -->
+    <div id="setPanelAI" style="display:none">
+      <p class="hint">AI 填入 / 批量识别需要调用大模型接口。可选在线 API（DeepSeek、智谱GLM 等 OpenAI 兼容接口），或本地离线模型（Ollama，免费、无需联网、数据不出本机）。</p>
+      <div class="input-field">
+        <label>AI 服务</label>
+        <select id="aiCfgProvider" onchange="switchAIProvider()">
+          <option value="online">🌐 在线 API（DeepSeek / 智谱GLM / OpenAI）</option>
+          <option value="ollama">💻 本地离线（Ollama 免费模型，无需联网）</option>
+        </select>
+      </div>
+      <div class="input-field" id="aiCfgOnlineBox">
+        <label>接口地址 (Base URL)</label>
+        <input type="text" id="aiCfgUrl" placeholder="https://api.deepseek.com">
+      </div>
+      <div class="input-field" id="aiCfgKeyBox">
+        <label>API Key</label>
+        <input type="password" id="aiCfgKey" placeholder="sk-...">
+      </div>
+      <div class="input-field" id="aiCfgModelBox">
+        <label>模型名</label>
+        <input type="text" id="aiCfgModel" placeholder="deepseek-chat">
+      </div>
+      <div class="input-field" id="aiCfgOllamaBox" style="display:none">
+        <label>本地模型（Ollama 已安装）</label>
+        <div class="dir-row">
+          <select id="aiCfgOllamaModel" onchange="document.getElementById('aiCfgModel').value=this.value" style="flex:1">
+            <option value="">— 检测中… —</option>
+          </select>
+          <button class="btn btn-ghost" onclick="loadOllamaModels()">🔄 刷新</button>
+        </div>
+        <div class="file-hint" id="aiCfgOllamaHint"></div>
+      </div>
+      <div class="input-field" id="aiCfgPresetBox">
+        <label>常用模板</label>
+        <select id="aiCfgPreset" onchange="applyAIPreset()">
+          <option value="">— 选择模板快速填充 —</option>
+          <option value="deepseek">DeepSeek (api.deepseek.com / deepseek-chat) 便宜</option>
+          <option value="glmflash">🆓 智谱GLM-4-Flash (open.bigmodel.cn / glm-4-flash) 免费</option>
+          <option value="glm">智谱GLM (open.bigmodel.cn / glm-4.7)</option>
+          <option value="siliconflow">🆓 硅基流动 (api.siliconflow.cn / Qwen2.5-7B) 注册送额度</option>
+          <option value="qwen">🆓 通义千问 (dashscope / qwen-turbo) 有免费额度</option>
+          <option value="openai">OpenAI (api.openai.com / gpt-4o-mini)</option>
+        </select>
+      </div>
+      <div class="ai-status" id="aiCfgStatus"></div>
+      <div class="modal-actions">
+        <button class="btn btn-ghost" id="aiCfgTestBtn" onclick="testAIConfig()">🔌 测试连接</button>
+        <button class="btn btn-blue" id="aiCfgSaveBtn" onclick="saveAIConfig()">保存 AI 配置</button>
+      </div>
+      <div class="ai-status" id="aiCfgTestResult"></div>
+    </div>
+
+    <!-- Tab3: 界面设置 -->
+    <div id="setPanelUI" style="display:none">
+      <div class="input-field">
+        <label>色系主题</label>
+        <div class="theme-grid" id="themeGrid"></div>
+      </div>
+      <div class="input-field">
+        <label>背景图片（可选，覆盖纯色背景）</label>
+        <input type="file" id="bgFile" accept=".png,.jpg,.jpeg,.webp,.bmp" onchange="uploadBg()">
+        <div class="file-hint">上传后立即生效；清除背景可点下方按钮</div>
+      </div>
+
+      <!-- 背景图预览 (点击可放大看效果) -->
+      <div class="bg-preview" id="bgPreviewWrap" style="display:none" onclick="openBgPreviewModal()" title="点击放大查看背景效果">
+        <img id="bgPreview" alt="背景图预览">
+        <div class="bg-preview-hint">🔍 点击放大预览（卡片透明度 / 图片填充）</div>
+      </div>
+
+      <!-- 滑轨调节: 亮度 / 图片透明度 / 卡片透明度 / 填充方式 (实时预览, 点"保存背景设置"才生效) -->
+      <div class="slider-group" id="bgTune" style="display:none">
+        <div class="slider-row">
+          <span class="slider-label">图片填充</span>
+          <select id="bgFillSel" onchange="onBgTune()">
+            <option value="cover">铺满（裁剪超出部分）</option>
+            <option value="contain">完整显示（四周留边）</option>
+            <option value="stretch">拉伸填满（可能变形）</option>
+            <option value="repeat">平铺重复</option>
+            <option value="original">原始尺寸居中</option>
+          </select>
+        </div>
+        <div class="slider-row">
+          <span class="slider-label">图片亮度</span>
+          <input type="range" id="bgBrightness" min="30" max="200" value="100" oninput="onBgTune()">
+          <span class="slider-val" id="bgBrightnessVal">100%</span>
+        </div>
+        <div class="slider-row">
+          <span class="slider-label">图片透明度</span>
+          <input type="range" id="bgOpacity" min="0" max="100" value="100" oninput="onBgTune()">
+          <span class="slider-val" id="bgOpacityVal">100%</span>
+        </div>
+        <div class="slider-row">
+          <span class="slider-label">卡片透明度</span>
+          <input type="range" id="cardOpacity" min="0" max="100" value="100" oninput="onBgTune()">
+          <span class="slider-val" id="cardOpacityVal">100%</span>
+        </div>
+      </div>
+
+      <div class="theme-actions">
+        <button class="btn btn-blue" id="btnSaveBg" style="display:none" onclick="saveBgSettings()">💾 保存背景设置</button>
+        <button class="btn btn-ghost" id="btnClearBg" onclick="clearBg()">🗑 清除背景图</button>
+      </div>
+
+      <!-- 装饰图片配置 -->
+      <div class="input-field">
+        <label>装饰图片 1（首页统计卡片下方左侧，可自定义或隐藏）</label>
+        <input type="file" id="decorFile1" accept=".png,.jpg,.jpeg,.webp" onchange="uploadDecor(1)">
+        <div class="decor-actions">
+          <button class="btn btn-ghost" onclick="clearDecor(1)">🗑 清除装饰图 1</button>
+        </div>
+        <div class="file-hint" id="decorHint1"></div>
+      </div>
+      <div class="input-field">
+        <label>装饰图片 2（首页统计卡片下方右侧，可自定义或隐藏）</label>
+        <input type="file" id="decorFile2" accept=".png,.jpg,.jpeg,.webp" onchange="uploadDecor(2)">
+        <div class="decor-actions">
+          <button class="btn btn-ghost" onclick="clearDecor(2)">🗑 清除装饰图 2</button>
+        </div>
+        <div class="file-hint" id="decorHint2"></div>
+      </div>
+
+      <div class="ai-status" id="setUIStatus"></div>
+    </div>
+
+    <!-- Tab4: 数据管理 -->
+    <div id="setPanelData" style="display:none">
+      <p class="hint">快速删除仓库数据。删除操作不可撤销，请谨慎使用。</p>
+      <div class="input-field">
+        <label>当前数据量</label>
+        <div class="file-hint" id="dataStatHint">加载中…</div>
+      </div>
+      <div class="data-clear-group">
+        <button class="btn btn-ghost" onclick="clearData('unclassified')">清空未分类</button>
+        <button class="btn btn-ghost" onclick="clearData('activity')">清除操作日志</button>
+        <button class="btn btn-danger" onclick="clearData('all')">🗑 清空全部数据</button>
+      </div>
+      <div class="file-hint">「清空全部数据」将删除所有分类、未分类元件和操作记录，保留设置（AI 配置/主题/背景图）。</div>
+
+      <div class="input-field" style="margin-top:14px">
+        <label>删除指定子分类（勾选后删除该子分类全部元件）</label>
+        <select id="delCatSel" onchange="onDelCatChange()"><option value="">— 选择一级分类 —</option></select>
+        <div class="del-subcat-list" id="delSubcatList"><div class="file-hint">选择一级分类后显示其子分类</div></div>
+        <div class="data-clear-group">
+          <button class="btn btn-danger" onclick="deleteSubcats()">🗑 删除所选子分类</button>
+        </div>
+      </div>
+      <div class="input-field" style="margin-top:14px">
+        <label>📦 数据包（备份 / 迁移 / 换机）</label>
+        <div class="data-clear-group">
+          <button class="btn btn-blue" onclick="exportPackage()">📤 导出数据包 (ZIP)</button>
+          <label class="btn btn-ghost" style="display:inline-block;cursor:pointer;margin:0">
+            📥 导入数据包
+            <input type="file" id="pkgFile" accept=".zip" hidden onchange="importPackage()">
+          </label>
+        </div>
+        <div class="dir-row" style="margin-top:8px">
+          <input type="text" id="pkgOutDir" placeholder="导出位置（留空 = data\exports\）">
+          <button class="btn btn-ghost" onclick="browsePkgDir()">📁 浏览…</button>
+        </div>
+        <div class="file-hint" id="pkgStatus">导出 = 全部元件打包成 ZIP；导入 = 合并进当前仓库（导入前自动备份，同名元件自动合并数量）</div>
+      </div>
+
+      <div class="ai-status" id="setDataStatus"></div>
+    </div>
+
+    <div class="modal-actions" style="margin-top:18px">
+      <button class="btn btn-ghost" onclick="closeAIConfig()">关闭</button>
+    </div>
+  </div>
+</div>
+
+<script src="/static/app.js"></script>
+
+<!-- 背景效果放大预览弹窗 (模拟主界面: 图片填充 + 卡片透明度) -->
+<div class="bg-modal-overlay" id="bgPreviewModal" style="display:none" onclick="if(event.target===this)closeBgPreviewModal()">
+  <div class="bg-modal">
+    <div class="bg-modal-head">
+      <h3>背景效果预览</h3>
+      <button class="btn btn-ghost" onclick="closeBgPreviewModal()">✕ 关闭</button>
+    </div>
+    <div class="bg-modal-stage" id="bgModalStage">
+      <div class="bg-modal-layer" id="bgModalLayer"></div>
+      <div class="bg-modal-card" style="top:7%; left:7%; width:44%; height:17%;">📊 统计卡片</div>
+      <div class="bg-modal-card" style="top:7%; right:7%; width:35%; height:17%;">📊 统计卡片</div>
+      <div class="bg-modal-card" style="top:30%; left:7%; width:86%; height:24%;">🗂️ 分类卡片区</div>
+      <div class="bg-modal-card" style="top:61%; left:7%; width:38%; height:26%;">📥 入口卡片</div>
+      <div class="bg-modal-card" style="top:61%; left:51%; width:36%; height:26%;">🧮 入口卡片</div>
+      <div class="bg-modal-tip" id="bgModalTip"></div>
+    </div>
+    <div class="bg-modal-foot">拖动滑轨可实时预览；点「💾 保存背景设置」才真正生效</div>
+  </div>
+</div>
+</body>
+</html>

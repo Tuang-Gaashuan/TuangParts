@@ -1,0 +1,3 @@
+# 发布产物 (走 GitHub Releases, 不入仓库)
+parts-warehouse.exe
+parts-warehouse-full.zip

@@ -1,0 +1,2 @@
+# 统一换行符: 文本文件 LF (bat 保持 CRLF 由 git 自动处理)
+* text=auto

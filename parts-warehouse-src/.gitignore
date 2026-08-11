@@ -1,0 +1,29 @@
+# ── 用户数据 (绝不入库) ──────────────────────────
+data/*
+# 但保留 data 目录结构说明
+!data/.gitkeep
+!data/README.md
+
+# ── 打包产物 / 缓存 ─────────────────────────────
+dist/
+build/
+build_onefile/
+build_tmp_dist/
+share_dist/
+__pycache__/
+*.pyc
+*.log
+flask_error.log
+
+# ── 本地备份 ────────────────────────────────────
+backups/
+
+# ── 编辑器 / 系统 ───────────────────────────────
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
+
+# ── 本地密钥 (如用 .env 存 key) ─────────────────
+.env
+.env.local
