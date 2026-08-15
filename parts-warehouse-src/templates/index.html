@@ -98,6 +98,10 @@
             <div class="entry-icon">🧮</div>
             <div class="entry-text">BOM匹配</div>
           </div>
+          <div class="entry-btn" id="entryBrand" onclick="goBrands()">
+            <div class="entry-icon">🏷️</div>
+            <div class="entry-text">品牌库</div>
+          </div>
           <div class="entry-btn" id="entryStock" onclick="goLowStock()">
             <div class="entry-icon">🚨</div>
             <div class="entry-text">补货提醒</div>
@@ -745,6 +749,39 @@
     </div>
   </div>
 </div>
+
+  <!-- 品牌库 (品牌聚合视图: 品牌 / 采购量 / 经营的元器件类别) -->
+  <section id="brandsPage" style="display:none">
+    <div class="detail-head">
+      <h2>🏷️ 品牌库</h2>
+      <span class="count-badge" id="brandStats"></span>
+    </div>
+    <div class="brand-tools">
+      <span class="uncat-hint">按品牌汇总采购记录，点卡片查看该品牌买过的全部元器件：</span>
+      <input type="text" id="brandSearch" placeholder="🔍 搜索品牌 / 类别 / 型号…" oninput="filterBrands()">
+      <button class="btn btn-ghost" onclick="exportBrands()" title="导出品牌汇总为 Excel">⬇️ 导出 Excel</button>
+      <button class="btn btn-blue" onclick="rebuildCatalog()" title="生成/更新 data/品牌库.xlsx（品牌、业务、已购种类、总件数）">📇 重建品牌库 Excel</button>
+    </div>
+    <div class="file-hint" id="brandCatalogHint"></div>
+    <div class="card-grid" id="brandGrid"></div>
+  </section>
+
+  <!-- 品牌明细 (某品牌下的全部元器件, 只读) -->
+  <section id="brandDetailPage" style="display:none">
+    <div class="detail-head">
+      <h2 id="brandDetailTitle">品牌</h2>
+      <span class="count-badge" id="brandDetailCount"></span>
+    </div>
+    <div class="brand-detail-tags" id="brandDetailOwners" style="margin-bottom:10px"></div>
+    <div class="table-wrap">
+      <table id="brandDetailTable">
+        <thead><tr>
+          <th>名称/型号</th><th>封装</th><th>数量</th><th>库位</th><th>子分类</th><th>规格参数</th><th>备注</th>
+        </tr></thead>
+        <tbody id="brandDetailBody"></tbody>
+      </table>
+    </div>
+  </section>
 
 <script src="/static/app.js"></script>
 

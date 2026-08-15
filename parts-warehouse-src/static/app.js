@@ -56,7 +56,7 @@ function hideToolbar(ids) {
 }
 
 function hideAllPages() {
-  for (const id of ["homePage", "overviewPage", "subcatPage", "detailPage", "lowstockPage", "unclassifiedPage", "withdrawPage", "inputPage", "bomMatchPage"]) {
+  for (const id of ["homePage", "overviewPage", "subcatPage", "detailPage", "lowstockPage", "unclassifiedPage", "withdrawPage", "inputPage", "bomMatchPage", "brandsPage", "brandDetailPage"]) {
     document.getElementById(id).style.display = "none";
   }
 }
@@ -80,6 +80,8 @@ async function render(page, push = true) {
   else if (page === "withdraw")   await renderWithdraw();
   else if (page === "bommatch")   await renderBomMatch();
   else if (page === "input")      await renderInput();
+  else if (page === "brands")     await renderBrands();
+  else if (page.startsWith("brand:")) await renderBrandDetail(page.slice(6));
 }
 
 // 导航入口 (HTML onclick 调用这些)
@@ -89,8 +91,10 @@ function goLowStock()    { render("lowstock"); }
 function goInput()       { render("input"); }
 function goWithdraw()    { render("withdraw"); }
 function goBomMatch()    { render("bommatch"); }
+function goBrands()      { render("brands"); }
 function goCategory(key) { render("category:" + key); }
 function goSubcat(name)  { render("subcat:" + name); }
+function goBrand(name)   { render("brand:" + name); }
 
 function goBack() {
   if (pageStack.length <= 1) { render("home", false); return; }
@@ -2231,6 +2235,116 @@ loadCameraList();
 document.getElementById("aiConfigModal").addEventListener("click", (e) => {
   if (e.target.id === "aiConfigModal") closeAIConfig();
 });
+
+// ── 品牌库 (品牌 / 采购量 / 经营的元器件类别) ──────────
+let brandAll = [];          // 品牌聚合列表缓存 (搜索过滤用)
+let brandReqSeq = 0;        // 请求序号: 防止快速切换时旧请求结果覆盖新页面 (乱串)
+
+function brandAvatar(brand) {
+  const b = String(brand || "").trim();
+  if (!b) return "?";
+  // 英文/数字品牌取前 2 个字母大写, 中文取第 1 个字
+  if (!/[\u4e00-\u9fff]/.test(b[0])) {
+    const m = b.match(/[A-Za-z0-9]/g);
+    if (m && m.length >= 2) return (m[0] + m[1]).toUpperCase();
+  }
+  return b[0].toUpperCase();
+}
+
+async function renderBrands() {
+  const seq = ++brandReqSeq;
+  document.getElementById("brandsPage").style.display = "";
+  document.getElementById("brandSearch").value = "";
+  const data = await api("/api/brands");
+  if (seq !== brandReqSeq) return;   // 期间已切换到其他页面, 丢弃旧结果
+  brandAll = data.brands;
+  const st = data.stats;
+  document.getElementById("brandStats").textContent =
+    `${st.brand_count} 个品牌 · ${st.item_count} 种元件 · 共 ${st.total_qty} 件` +
+    (st.no_brand ? `（另有 ${st.no_brand} 条未填写品牌）` : "");
+  renderBrandGrid(brandAll);
+}
+
+function renderBrandGrid(list) {
+  const grid = document.getElementById("brandGrid");
+  grid.innerHTML = "";
+  if (!list.length) {
+    grid.innerHTML = '<div class="empty-hint">暂无品牌数据 —— 库存里还没有填写「品牌」字段的元器件</div>';
+    return;
+  }
+  list.forEach((b, i) => {
+    const [bg, fg] = PALETTE[i % PALETTE.length];
+    const el = document.createElement("div");
+    el.className = "card";
+    el.title = `点击查看 ${b.brand} 的全部元器件` +
+      (b.aliases && b.aliases.length ? `\n同品牌其他写法: ${b.aliases.join(" / ")}` : "");
+    el.innerHTML = `
+      <div class="brand-avatar" style="background:${bg};color:${fg}">${escHtml(brandAvatar(b.brand))}</div>
+      <div class="card-name" style="font-size:15px">${escHtml(b.brand)}${b.aliases && b.aliases.length ? '<span class="alias-badge" title="同品牌其他写法已合并">多写法</span>' : ""}</div>
+      <div class="brand-biz" title="${escHtml(b.business || "")}">${escHtml(b.business || "")}</div>
+      <div class="brand-stats">${b.count} 种 · 共 ${b.total_qty} 件</div>
+      <div class="brand-tags">${b.owners.map(o => `<span class="tag-chip">${escHtml(o)}</span>`).join("")}</div>`;
+    el.onclick = () => goBrand(b.brand);
+    grid.appendChild(el);
+  });
+}
+
+async function rebuildCatalog() {
+  const hint = document.getElementById("brandCatalogHint");
+  hint.textContent = "生成中…";
+  const res = await api("/api/brands/catalog", { method: "POST", body: "{}" });
+  if (!res.ok) { hint.textContent = `❌ ${res.error}`; return; }
+  hint.textContent = `✅ 已生成 ${res.path}（品牌/业务/已购种类/总件数，可随时用 WPS/Excel 打开查看）`;
+  showToast("品牌库 Excel 已重建");
+}
+
+function filterBrands() {
+  const q = document.getElementById("brandSearch").value.trim().toLowerCase();
+  if (!q) { renderBrandGrid(brandAll); return; }
+  const list = brandAll.filter((b) =>
+    b.brand.toLowerCase().includes(q) ||
+    b.owners.some((o) => o.toLowerCase().includes(q)) ||
+    b.subcats.some((s) => s.toLowerCase().includes(q)) ||
+    b.samples.some((s) => s.toLowerCase().includes(q)));
+  renderBrandGrid(list);
+}
+
+async function renderBrandDetail(name) {
+  const seq = ++brandReqSeq;
+  document.getElementById("brandDetailPage").style.display = "";
+  const data = await api(`/api/brands/detail?brand=${encodeURIComponent(name)}`);
+  if (seq !== brandReqSeq) return;   // 期间已切换到其他品牌/页面, 丢弃旧结果
+  document.getElementById("brandDetailTitle").textContent = `🏷️ ${data.brand}`;
+  document.getElementById("brandDetailCount").textContent = `${data.items.length} 条记录`;
+  const owners = [...new Set(data.items.map((it) => it.owner).filter(Boolean))];
+  const tags = owners.map((o) => `<span class="tag-chip">${escHtml(o)}</span>`);
+  if (data.aliases && data.aliases.length) {
+    tags.push(`<span class="tag-chip alias-chip" title="同一品牌的不同写法已合并统计">≈ ${escHtml(data.aliases.join(" / "))}</span>`);
+  }
+  document.getElementById("brandDetailOwners").innerHTML = tags.join("");
+  const tbody = document.getElementById("brandDetailBody");
+  tbody.innerHTML = "";
+  if (!data.items.length) {
+    tbody.innerHTML = '<tr><td colspan="7"><div class="empty-hint">没有该品牌的库存记录</div></td></tr>';
+    return;
+  }
+  data.items.forEach((it) => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${escHtml(it.name)}</td>
+      <td>${escHtml(it.package)}</td>
+      <td>${escHtml(it.qty)}</td>
+      <td>${escHtml(it.location)}</td>
+      <td>${escHtml(it.subcat)}</td>
+      <td class="uncat-raw">${escHtml(it.spec)}</td>
+      <td>${escHtml(it.note)}</td>`;
+    tbody.appendChild(tr);
+  });
+}
+
+function exportBrands() {
+  window.location.href = "/api/brands/export";
+}
 
 // ── 启动 ───────────────────────────────
 pageStack = ["home"];

@@ -60,6 +60,7 @@ a = Analysis(
         (os.path.join(project_dir, "warehouse"), "warehouse"),
         # 预置示例数据 (分享版种子: 空仓库/无个人数据)
         (os.path.join(project_dir, "data"), "data"),
+        (os.path.join(project_dir, "LICENSE"), "."),
         # pywebview 运行库: 保持包内相对路径 (webview/lib/...),
         # 否则 frozen 模式下 interop_dll_path() 找不到
         # Microsoft.Web.WebView2.*.dll / WebView2Loader.dll → 启动即崩 (退出码 1)
@@ -78,6 +79,7 @@ a = Analysis(
         "warehouse.unclassified",
         "warehouse.ocr",
         "warehouse.withdraw_match",
+        "warehouse.brands",
         "openpyxl",
         "openpyxl.cell._writer",
         "openpyxl.styles",

@@ -62,6 +62,7 @@ a = Analysis(
         (os.path.join(project_dir, "warehouse"), "warehouse"),
         # 种子数据 = 项目 data/ (空仓库无 key, 首次运行复制到 exe 旁)
         (os.path.join(project_dir, "data"), "data"),
+        (os.path.join(project_dir, "LICENSE"), "."),
         (os.path.join(_WV_DIR, "lib"), "webview/lib"),
     ] + rapidocr_datas,
     hiddenimports=[
@@ -77,6 +78,7 @@ a = Analysis(
         "warehouse.unclassified",
         "warehouse.ocr",
         "warehouse.withdraw_match",
+        "warehouse.brands",
         "openpyxl",
         "openpyxl.cell._writer",
         "openpyxl.styles",

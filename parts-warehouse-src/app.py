@@ -24,7 +24,7 @@ from datetime import datetime
 # 原生层崩溃 (OpenCV/摄像头驱动) 无 Python traceback, faulthandler 能打印线程栈定位
 faulthandler.enable()
 
-from flask import Flask, jsonify, render_template, request, send_from_directory
+from flask import Flask, jsonify, render_template, request, send_from_directory, send_file
 
 from warehouse.config import CATEGORIES, fields_for, subcats, subcat_owners, primary_owner, safe_filename
 from warehouse.excel_store import ExcelStore
@@ -561,6 +561,55 @@ def lowstock():
     threshold = request.args.get("threshold", default=10, type=int)
     items = store.low_stock(threshold)
     return jsonify({"threshold": threshold, "items": items})
+
+
+# ── API: 品牌库 (采购参考: 品牌 / 采购量 / 经营的元器件类别) ──
+@app.route("/api/brands")
+def brands():
+    """品牌聚合: 品牌名称 + 条目数 + 总数量 + 覆盖的一级分类/子分类 + 型号示例。"""
+    from warehouse.brands import aggregate
+    data = aggregate(get_data_dir())
+    return jsonify(data)
+
+
+@app.route("/api/brands/detail")
+def brands_detail():
+    """某品牌(含所有别名写法)下的全部元器件行 (只读明细表)。"""
+    brand = (request.args.get("brand") or "").strip()
+    if not brand:
+        return jsonify({"error": "缺少品牌名"}), 400
+    from warehouse.brands import detail as brands_detail_rows
+    res = brands_detail_rows(get_data_dir(), brand)
+    return jsonify({"brand": brand, "items": res["items"], "count": len(res["items"]),
+                    "aliases": res["aliases"]})
+
+
+@app.route("/api/brands/export")
+def brands_export():
+    """品牌汇总导出为 xlsx (直接下载)。"""
+    from io import BytesIO
+    from warehouse.brands import export_xlsx
+    try:
+        data = export_xlsx(get_data_dir())
+    except Exception as e:
+        return jsonify({"error": f"导出失败: {str(e)[:200]}"}), 500
+    fname = f"parts-warehouse_品牌汇总_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+    return send_file(
+        BytesIO(data), as_attachment=True, download_name=fname,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+
+@app.route("/api/brands/catalog", methods=["POST"])
+def brands_catalog():
+    """重建品牌库档案 data/品牌库.xlsx (品牌/业务/已购种类/总件数)。"""
+    from warehouse.brands import build_catalog
+    try:
+        p = build_catalog(get_data_dir())
+        # 绝对路径返回 (数据目录可能在别的盘, relpath 会跨盘崩溃)
+        return jsonify({"ok": True, "path": p})
+    except Exception as e:
+        return jsonify({"error": f"生成失败: {str(e)[:200]}"}), 500
 
 
 # ── API: AI 连通性测试 ─────────────────────────────────
