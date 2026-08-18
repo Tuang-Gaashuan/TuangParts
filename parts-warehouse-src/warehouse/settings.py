@@ -25,7 +25,7 @@ DEFAULT_SETTINGS = {
     "ai": {
         "provider": "online",   # online=在线API | ollama=本地离线模型
         "base_url": "https://api.deepseek.com",
-        "api_key": "",
+        "api_key": "",          # 仅由本机 data/settings.json 或设置页保存
         "model": "deepseek-chat",
     },
 }

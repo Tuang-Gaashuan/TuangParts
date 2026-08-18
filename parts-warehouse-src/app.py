@@ -1145,9 +1145,12 @@ def import_parse_excel():
     fname = f.filename or ""
     if not fname.lower().endswith((".xlsx", ".xls")):
         return jsonify({"error": "仅支持 .xlsx / .xls 文件"}), 400
+    raw_file = f.read()
+    if not raw_file:
+        return jsonify({"error": "导入文件为空"}), 400
     try:
         parser = BatchParser(cfg["api_key"], cfg["base_url"], cfg["model"])
-        items, preview = parser.parse_excel(f.read(), fname)
+        items, preview = parser.parse_excel(raw_file, fname)
         return jsonify({"ok": True, "items": items, "preview": preview,
                         "filename": fname, "dropped_nc": parser.dropped_nc,
                         "usage": parser.usage})

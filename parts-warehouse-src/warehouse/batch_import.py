@@ -15,7 +15,9 @@ import os
 import re
 import difflib
 from io import BytesIO
+import zipfile
 
+import xlrd
 from openpyxl import load_workbook
 from warehouse.config import CATEGORIES, COMMON_FIELDS, primary_owner
 from warehouse.settings import load_settings, chat_completions_url
@@ -309,21 +311,152 @@ class BatchParser:
         return items
 
     # ── Excel 解析 ──────────────────────────────────────
+    @staticmethod
+    def _parse_structured_rows(header: list, data_rows: list) -> list | None:
+        """直接解析具备明确字段的采购/库存表；表头不明确时返回 None 交给 AI。"""
+        normalized = [str(cell).strip().lower().replace(" ", "") for cell in header]
+
+        def column(*names):
+            for index, value in enumerate(normalized):
+                if any(name in value for name in names):
+                    return index
+            return None
+
+        name_col = column("商品型号", "型号", "model", "partnumber", "mpn")
+        brand_col = column("品牌", "manufacturer", "brand")
+        package_col = column("封装格式", "封装", "package", "footprint")
+        qty_col = column("订购数量", "数量", "quantity", "qty")
+        desc_col = column("商品名称", "描述", "description", "comment", "value")
+        type_col = column("商品类型", "元件类型", "type", "category")
+        if name_col is None or (qty_col is None and desc_col is None):
+            return None
+
+        def value_at(row, index):
+            if index is None or index >= len(row) or row[index] is None:
+                return ""
+            return str(row[index]).strip()
+
+        items = []
+        for row in data_rows:
+            name = value_at(row, name_col)
+            desc = value_at(row, desc_col)
+            # 导出的采购报表常在明细后附“合计金额/说明”行；没有型号和描述即不是物料。
+            if not name and not desc:
+                continue
+            raw = " ".join(value_at(row, index) for index in range(len(header))).strip()
+            category_text = " ".join((value_at(row, type_col), desc, name))
+            cat_key, subcat = None, ""
+            for key, (_, subs) in CATEGORIES.items():
+                for candidate in subs:
+                    if candidate and candidate.lower() in category_text.lower():
+                        cat_key, subcat = key, candidate
+                        break
+                if cat_key:
+                    break
+            if cat_key is None:
+                from warehouse.rules import RuleParser
+                classified = RuleParser().parse_line(category_text)
+                if classified:
+                    cat_key, subcat = classified["cat_key"], classified["subcat"]
+            # 被动件优先用可检索的数值作名称；商品型号保留在规格，避免丢失精确料号。
+            passive_value = ""
+            if cat_key in {"capacitor", "resistor", "inductor"}:
+                value_match = re.search(
+                    r"(?<![A-Za-z0-9])(\d+(?:\.\d+)?\s*(?:[pnumkKMµ]?\s*(?:F|H|Ω)|[Rr](?=\s|$)|[kKmM](?:Ω|ohm)?))(?![A-Za-z])",
+                    desc,
+                    re.IGNORECASE,
+                )
+                if value_match:
+                    passive_value = re.sub(r"\s+", "", value_match.group(1)).replace("µ", "u")
+            spec = desc
+            if name and name.lower() not in spec.lower():
+                spec = f"{name} {spec}".strip()
+            items.append({
+                "name": passive_value or name or desc,
+                "brand": value_at(row, brand_col),
+                "package": value_at(row, package_col),
+                "qty": value_at(row, qty_col) or "10",
+                "spec": spec,
+                "cat_key": cat_key,
+                "subcat": subcat,
+                "raw": raw,
+            })
+        return items
+
+    @staticmethod
+    def _detect_header_row(rows: list) -> int:
+        """在前置标题/汇总行之后，自动定位最像字段名的表头行。"""
+        header_tokens = {
+            "订单", "料号", "商品", "型号", "名称", "品牌", "封装", "规格", "数量",
+            "数量", "单位", "价格", "金额", "日期", "编号", "位号", "comment", "value",
+            "part", "model", "package", "manufacturer", "quantity", "qty", "description",
+        }
+        best_index, best_score = 0, -1
+        # 仅从前 20 行找表头，避免把后续真实数据误判为表头。
+        for index, row in enumerate(rows[:20]):
+            cells = [str(cell).strip() for cell in row if cell is not None and str(cell).strip()]
+            if not cells:
+                continue
+            score = 0
+            for cell in cells:
+                normalized = cell.lower().replace(" ", "")
+                if any(token in normalized for token in header_tokens):
+                    score += 1
+            # 表头通常至少有两个字段关键词；同分时取更靠前的一行。
+            if score > best_score:
+                best_index, best_score = index, score
+        return best_index if best_score >= 2 else 0
+
+    @staticmethod
+    def _read_excel_rows(file_bytes: bytes, filename: str) -> list:
+        """读取 .xlsx/.xls 为行数据；后缀与实际文件格式不一致时给出可理解的错误。"""
+        suffix = os.path.splitext(filename)[1].lower()
+        is_zip = file_bytes.startswith(b"PK\\x03\\x04")
+
+        if suffix == ".xls" and not is_zip:
+            try:
+                book = xlrd.open_workbook(file_contents=file_bytes)
+                sheet = book.sheet_by_index(0)
+                return [sheet.row_values(i) for i in range(sheet.nrows)]
+            except xlrd.biffh.XLRDError as e:
+                raise ValueError("该文件不是可读取的 Excel 工作簿，请用 Excel/WPS 另存为 .xlsx 后再导入。") from e
+
+        try:
+            wb = load_workbook(BytesIO(file_bytes), data_only=True, read_only=True)
+        except zipfile.BadZipFile as e:
+            if suffix == ".xls":
+                raise ValueError("文件扩展名是 .xls，但实际内容不是标准 Excel 文件。请用 Excel/WPS 打开后“另存为” .xlsx，再导入。") from e
+            raise ValueError("该 .xlsx 文件内容不完整或并非真正的 Excel 文件。请用 Excel/WPS 打开并“另存为”新的 .xlsx 后重试。") from e
+        try:
+            ws = wb.active
+            return list(ws.iter_rows(values_only=True))
+        finally:
+            wb.close()
+
     def parse_excel(self, file_bytes: bytes, filename: str = "") -> tuple:
         """解析 Excel 文件。返回 (items, sheet_preview)。
         items 与 parse_text 同结构。sheet_preview 为前3行预览(用于前端展示)。"""
-        wb = load_workbook(BytesIO(file_bytes), data_only=True)
-        ws = wb.active
-        rows = list(ws.iter_rows(values_only=True))
-        wb.close()
+        rows = self._read_excel_rows(file_bytes, filename)
         if not rows:
             return [], []
 
-        # 去空行
-        rows = [r for r in rows if any(c is not None and str(c).strip() for c in r)]
-        header = [str(c).strip() if c is not None else "" for c in rows[0]]
-        data_rows = rows[1:]
+        # 自动定位表头：兼容对账单/报表前的标题、合计、日期等非表格内容。
+        header_index = self._detect_header_row(rows)
+        header_row = rows[header_index]
+        header = [str(c).strip() if c is not None else "" for c in header_row]
+        data_rows = rows[header_index + 1:]
         preview = [header] + [list(r)[: min(len(header), 8)] for r in data_rows[:2]]
+
+        # 采购明细、标准 BOM 等表格已具备型号/数量/描述字段时，优先纯规则直读。
+        # 这样无需传输整表到远程模型；表头含义不明确时才回退 AI。
+        structured_items = self._parse_structured_rows(header, data_rows)
+        if structured_items is not None:
+            self.dropped_nc = len(structured_items)
+            structured_items = _fix_part_ref_name(structured_items)
+            structured_items = _normalize_capacitor(structured_items)
+            structured_items = _drop_nc_items(structured_items)
+            self.dropped_nc -= len(structured_items)
+            return structured_items, preview
 
         tree = _category_tree_text()
         items = []

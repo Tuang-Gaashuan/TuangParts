@@ -7,4 +7,5 @@ httpx>=0.27         # AI 接口 HTTP 客户端
 pywebview>=5.0      # 桌面原生窗口 (WebView2)
 opencv-python>=4.8  # 摄像头拍照入库 / 图片亮度检测
 rapidocr>=1.3       # 图片文字识别 (料袋标签 / BOM 截图)
+xlrd>=2.0            # 读取旧版 .xls 采购/对账表
 pyinstaller>=6.0    # 打包 exe (可选, 不打包可注释掉)
