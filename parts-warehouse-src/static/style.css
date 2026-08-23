@@ -461,6 +461,21 @@ tbody tr.new-row { background: #ecfdf5; animation: flash 1.6s ease; }
 
 td[contenteditable="true"]:focus { outline: 2px solid var(--blue); outline-offset: -2px; background: var(--card-bg); }
 
+/* ── BOM 文件取出份数 ─────────────────── */
+.wd-copies-bar {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 10px;
+  margin-top: 12px; padding: 12px 14px;
+  border: 1px solid #fed7aa; border-radius: 10px;
+  background: #fff7ed;
+}
+.wd-copies-read { color: #9a3412; font-size: 13px; font-weight: 700; margin-right: 8px; }
+.wd-copies-bar label { color: #374151; font-size: 13px; font-weight: 700; }
+.wd-copies-bar input {
+  width: 78px; border: 1px solid #fdba74; border-radius: 8px;
+  padding: 8px 10px; font-size: 14px; background: #fff; color: var(--text);
+}
+.wd-copies-bar input:focus { outline: none; border-color: #f97316; box-shadow: 0 0 0 3px rgba(249,115,22,.14); }
+
 /* ── 弹窗 ───────────────────────────── */
 .modal-mask {
   position: fixed; inset: 0; background: rgba(15,23,42,.45);

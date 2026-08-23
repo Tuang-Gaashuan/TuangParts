@@ -453,6 +453,44 @@ async function wdParseTextRules() {
   await wdMatchItems(res.items, res.dropped_nc || 0, null);
 }
 
+let wdPendingFileItems = null;
+let wdPendingFileDroppedNc = 0;
+let wdPendingFileUsage = null;
+let wdPendingFileStatusId = "wdFileStatus";
+
+function openWdCopiesBar(items, droppedNc, usage, statusId = "wdFileStatus") {
+  wdPendingFileItems = items;
+  wdPendingFileDroppedNc = droppedNc || 0;
+  wdPendingFileUsage = usage || null;
+  wdPendingFileStatusId = statusId;
+  document.getElementById("wdCopiesRead").textContent = `BOM 已读取：${items.length} 条`;
+  document.getElementById("wdCopiesInput").value = "1";
+  document.getElementById("wdCopiesBar").style.display = "flex";
+}
+
+function applyWdCopies() {
+  const input = document.getElementById("wdCopiesInput");
+  const copies = parseInt(input.value, 10);
+  const statusEl = document.getElementById(wdPendingFileStatusId);
+  if (!Number.isInteger(copies) || copies < 1) {
+    statusEl.textContent = "取出几份必须是大于等于 1 的整数";
+    input.focus();
+    return;
+  }
+  if (!wdPendingFileItems || !wdPendingFileItems.length) {
+    statusEl.textContent = "请先读取 BOM 文件";
+    return;
+  }
+  const scaled = wdPendingFileItems.map((item) => {
+    const copy = { ...item };
+    const qty = bmParseQty(copy.qty);
+    if (qty != null) copy.qty = String(qty * copies);
+    return copy;
+  });
+  statusEl.textContent = `已按 ${copies} 份计算，正在匹配库存…`;
+  wdMatchItems(scaled, wdPendingFileDroppedNc, wdPendingFileUsage, copies, wdPendingFileStatusId);
+}
+
 async function wdParseFile() {
   const f = document.getElementById("wdBomFile").files[0];
   const statusEl = document.getElementById("wdFileStatus");
@@ -463,7 +501,7 @@ async function wdParseFile() {
   const res = await fetch("/api/import_parse_excel", { method: "POST", body: form });
   const data = await res.json();
   if (!data.ok) { statusEl.textContent = `❌ ${data.error}`; return; }
-  await wdMatchItems(data.items, data.dropped_nc || 0, data.usage);
+  openWdCopiesBar(data.items, data.dropped_nc || 0, data.usage);
 }
 
 async function wdParseFileRules() {
@@ -476,11 +514,11 @@ async function wdParseFileRules() {
   const res = await fetch("/api/import_parse_rules", { method: "POST", body: form });
   const data = await res.json();
   if (!data.ok) { statusEl.textContent = `❌ ${data.error}`; return; }
-  await wdMatchItems(data.items, data.dropped_nc || 0, null);
+  openWdCopiesBar(data.items, data.dropped_nc || 0, null);
 }
 
-async function wdMatchItems(items, droppedNc, usage) {
-  const statusEl = document.getElementById("wdMatchStatus");
+async function wdMatchItems(items, droppedNc, usage, copies = 1, statusId = "wdMatchStatus") {
+  const statusEl = document.getElementById(statusId);
   if (!items.length) { statusEl.textContent = "没有解析出元件"; return; }
   statusEl.textContent = "匹配现有库存中…";
   const m = await api("/api/withdraw/match", {
@@ -491,8 +529,9 @@ async function wdMatchItems(items, droppedNc, usage) {
   document.getElementById("wdMatchResult").style.display = "";
   const ncNote = droppedNc ? `（已剔除 ${droppedNc} 条 NC/不贴装）` : "";
   const tkNote = usage ? fmtUsage(usage) : "（脚本解析，未使用 AI）";
+  const copyNote = copies > 1 ? `，按 ${copies} 份计算` : "";
   statusEl.textContent =
-    `✅ 匹配完成：${m.matched}/${m.total} 项有库存可取出，其余需要采购${ncNote}${tkNote}`;
+    `✅ 匹配完成：${m.matched}/${m.total} 项有库存可取出，其余需要采购${copyNote}${ncNote}${tkNote}`;
 }
 
 function renderWdMatch(results) {

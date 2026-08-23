@@ -1171,17 +1171,11 @@ def import_parse_rules():
         fname = (f.filename or "").lower()
         data = f.read()
         if fname.endswith((".xlsx", ".xls")):
-            from io import BytesIO
-            from openpyxl import load_workbook
-            wb = load_workbook(BytesIO(data), data_only=True)
-            ws = wb.active
-            lines = []
-            for row in ws.iter_rows(values_only=True):
-                cells = [str(c).strip() for c in row if c is not None and str(c).strip()]
-                if cells:
-                    lines.append(" ".join(cells))
-            wb.close()
-            text = "\n".join(lines)
+            cfg = get_ai_cfg() or {"api_key": "", "base_url": "", "model": ""}
+            parser = BatchParser(cfg["api_key"], cfg["base_url"], cfg["model"])
+            items, _preview = parser.parse_excel(data, f.filename or fname)
+            return jsonify({"ok": True, "items": items, "dropped_nc": parser.dropped_nc,
+                            "mode": "rules"})
         else:
             try:
                 text = data.decode("utf-8")

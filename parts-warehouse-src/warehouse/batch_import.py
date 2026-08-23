@@ -70,6 +70,23 @@ def _drop_nc_items(items: list) -> list:
     return kept
 
 
+def _normalize_quantity(value, default="10") -> str:
+    """把 Excel 中常见的数量写法统一成可参与倍数计算的整数文本。"""
+    text = str(value or "").strip()
+    if not text:
+        return default
+    match = re.search(r"[-+]?\d+(?:\.\d+)?", text.replace(",", ""))
+    if not match:
+        return default
+    try:
+        number = float(match.group(0))
+    except ValueError:
+        return default
+    if number < 0:
+        return default
+    return str(int(number)) if number.is_integer() else str(number)
+
+
 # 电容容值模式: 数字 + 单位 (uF/nF/pF/mF/F), 大小写/µ 均可
 CAP_VALUE_RE = re.compile(r"(\d+(?:\.\d+)?)\s*(u|µ|n|p|m)?F", re.IGNORECASE)
 
@@ -297,7 +314,7 @@ class BatchParser:
                     "name": str(d.get("name", "")).strip(),
                     "brand": str(d.get("brand", "")).strip(),
                     "package": str(d.get("package", "")).strip(),
-                    "qty": str(d.get("qty", "10")).strip(),
+                    "qty": _normalize_quantity(d.get("qty", "10")),
                     "spec": str(d.get("spec", "")).strip(),
                     "cat_key": cat_key,
                     "subcat": subcat,
@@ -322,11 +339,11 @@ class BatchParser:
                     return index
             return None
 
-        name_col = column("商品型号", "型号", "model", "partnumber", "mpn")
+        name_col = column("商品型号", "型号", "model", "partnumber", "mpn", "value", "值")
         brand_col = column("品牌", "manufacturer", "brand")
         package_col = column("封装格式", "封装", "package", "footprint")
         qty_col = column("订购数量", "数量", "quantity", "qty")
-        desc_col = column("商品名称", "描述", "description", "comment", "value")
+        desc_col = column("商品名称", "描述", "规格参数", "规格", "description", "comment", "remarks", "备注")
         type_col = column("商品类型", "元件类型", "type", "category")
         if name_col is None or (qty_col is None and desc_col is None):
             return None
@@ -375,7 +392,7 @@ class BatchParser:
                 "name": passive_value or name or desc,
                 "brand": value_at(row, brand_col),
                 "package": value_at(row, package_col),
-                "qty": value_at(row, qty_col) or "10",
+                "qty": _normalize_quantity(value_at(row, qty_col)),
                 "spec": spec,
                 "cat_key": cat_key,
                 "subcat": subcat,
@@ -389,7 +406,8 @@ class BatchParser:
         header_tokens = {
             "订单", "料号", "商品", "型号", "名称", "品牌", "封装", "规格", "数量",
             "数量", "单位", "价格", "金额", "日期", "编号", "位号", "comment", "value",
-            "part", "model", "package", "manufacturer", "quantity", "qty", "description",
+            "part", "model", "value", "值", "reference", "ref", "footprint", "package",
+            "manufacturer", "quantity", "qty", "description", "remarks", "comment",
         }
         best_index, best_score = 0, -1
         # 仅从前 20 行找表头，避免把后续真实数据误判为表头。
@@ -416,8 +434,12 @@ class BatchParser:
         if suffix == ".xls" and not is_zip:
             try:
                 book = xlrd.open_workbook(file_contents=file_bytes)
-                sheet = book.sheet_by_index(0)
-                return [sheet.row_values(i) for i in range(sheet.nrows)]
+                candidates = []
+                for index in range(book.nsheets):
+                    sheet = book.sheet_by_index(index)
+                    rows = [sheet.row_values(i) for i in range(sheet.nrows)]
+                    candidates.append((BatchParser._sheet_header_score(rows), index, rows))
+                return max(candidates, key=lambda item: (item[0], -item[1]))[2] if candidates else []
             except xlrd.biffh.XLRDError as e:
                 raise ValueError("该文件不是可读取的 Excel 工作簿，请用 Excel/WPS 另存为 .xlsx 后再导入。") from e
 
@@ -428,10 +450,28 @@ class BatchParser:
                 raise ValueError("文件扩展名是 .xls，但实际内容不是标准 Excel 文件。请用 Excel/WPS 打开后“另存为” .xlsx，再导入。") from e
             raise ValueError("该 .xlsx 文件内容不完整或并非真正的 Excel 文件。请用 Excel/WPS 打开并“另存为”新的 .xlsx 后重试。") from e
         try:
-            ws = wb.active
-            return list(ws.iter_rows(values_only=True))
+            candidates = []
+            for index, ws in enumerate(wb.worksheets):
+                rows = list(ws.iter_rows(values_only=True))
+                candidates.append((BatchParser._sheet_header_score(rows), index, rows))
+            return max(candidates, key=lambda item: (item[0], -item[1]))[2] if candidates else []
         finally:
             wb.close()
+
+    @staticmethod
+    def _sheet_header_score(rows: list) -> int:
+        """为工作表评分，选择最像 BOM/采购明细的工作表。"""
+        if not rows:
+            return -1
+        header_index = BatchParser._detect_header_row(rows)
+        cells = [str(cell).strip().lower().replace(" ", "")
+                 for cell in rows[header_index] if cell is not None and str(cell).strip()]
+        tokens = (
+            "型号", "商品型号", "model", "mpn", "value", "值", "数量", "qty",
+            "quantity", "封装", "package", "footprint", "品牌", "brand", "manufacturer",
+            "reference", "位号", "description", "描述",
+        )
+        return sum(1 for cell in cells if any(token in cell for token in tokens))
 
     def parse_excel(self, file_bytes: bytes, filename: str = "") -> tuple:
         """解析 Excel 文件。返回 (items, sheet_preview)。
@@ -505,7 +545,7 @@ name 应填型号或规格值(如 10uF、10kΩ、STM32F103C8T6); 若某列只是
                     "name": str(d.get("name", "")).strip(),
                     "brand": str(d.get("brand", "")).strip(),
                     "package": str(d.get("package", "")).strip(),
-                    "qty": str(d.get("qty", "10")).strip(),
+                    "qty": _normalize_quantity(d.get("qty", "10")),
                     "spec": str(d.get("spec", "")).strip(),
                     "cat_key": cat_key,
                     "subcat": subcat,
