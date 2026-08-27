@@ -28,6 +28,23 @@ DEFAULT_SETTINGS = {
         "api_key": "",          # 仅由本机 data/settings.json 或设置页保存
         "model": "deepseek-chat",
     },
+    "git_sync": {
+        "enabled": False,
+        "remote_url": "",
+        "local_dir": "",
+        "branch": "main",
+        "events_dir": "events",
+        "username": "",
+    },
+    "sync_provider": "gitee",   # 线上同步平台: git=Git/GitHub | gitee=Gitee
+    "gitee_sync": {
+        "enabled": False,
+        "remote_url": "",
+        "local_dir": "",
+        "branch": "main",
+        "events_dir": "events",
+        "username": "",
+    },
 }
 
 
@@ -55,6 +72,7 @@ def _migrate_legacy(app_dir: str, s: dict) -> dict:
 def load_settings(app_dir: str) -> dict:
     """读取设置 (应用默认值 + 迁移旧配置)。"""
     s = json.loads(json.dumps(DEFAULT_SETTINGS))  # 深拷贝
+    saved = {}
     p = settings_path(app_dir)
     if os.path.exists(p):
         try:
@@ -69,6 +87,9 @@ def load_settings(app_dir: str) -> dict:
         except (json.JSONDecodeError, OSError):
             pass
     s = _migrate_legacy(app_dir, s)
+    # 旧版只有 git_sync 且已配置时，迁移为 gitee_sync（当前远端实际是 Gitee 时无缝续用）
+    if "gitee_sync" not in saved and s.get("git_sync", {}).get("remote_url"):
+        s["gitee_sync"] = dict(s["git_sync"])
     return s
 
 
@@ -131,5 +152,24 @@ def public_view(s: dict) -> dict:
             "model": s["ai"].get("model", ""),
             "configured": bool(key),
             "api_key_masked": masked,
+        },
+        "git_sync": {
+            "enabled": bool(s.get("git_sync", {}).get("enabled", False)),
+            "remote_url": s.get("git_sync", {}).get("remote_url", ""),
+            "local_dir": s.get("git_sync", {}).get("local_dir", ""),
+            "branch": s.get("git_sync", {}).get("branch", "main"),
+            "events_dir": s.get("git_sync", {}).get("events_dir", "events"),
+            "username": s.get("git_sync", {}).get("username", ""),
+            "configured": bool(s.get("git_sync", {}).get("remote_url") and s.get("git_sync", {}).get("local_dir")),
+        },
+        "sync_provider": str(s.get("sync_provider", "gitee")),
+        "gitee_sync": {
+            "enabled": bool(s.get("gitee_sync", {}).get("enabled", False)),
+            "remote_url": s.get("gitee_sync", {}).get("remote_url", ""),
+            "local_dir": s.get("gitee_sync", {}).get("local_dir", ""),
+            "branch": s.get("gitee_sync", {}).get("branch", "main"),
+            "events_dir": s.get("gitee_sync", {}).get("events_dir", "events"),
+            "username": s.get("gitee_sync", {}).get("username", ""),
+            "configured": bool(s.get("gitee_sync", {}).get("remote_url") and s.get("gitee_sync", {}).get("local_dir")),
         },
     }

@@ -3,8 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>元器件仓库</title>
-<link rel="icon" type="image/x-icon" href="/static/favicon.ico">
+<title>TuangParts</title>
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
@@ -14,12 +13,12 @@
 <!-- 顶部栏 -->
 <header>
   <div class="logo" onclick="goHome()" style="cursor:pointer">
-    <div class="logo-icon">⚡</div>
-    <span>元器件仓库</span>
+    <span class="logo-name">TuangParts</span>
   </div>
   <div class="header-actions" id="headerActions">
     <button class="btn btn-ghost" id="btnAIConfig" onclick="openAIConfig()" title="设置">⚙️ 设置</button>
     <button class="btn btn-ghost" id="btnUndo" onclick="openUndoModal()" title="撤回最近的操作">↩️ 撤回</button>
+    <button class="btn btn-ghost" id="btnClearHomeLogs" onclick="clearHomeLogs()" title="清除最近出入摘要">🧹 清除摘要</button>
     <input type="text" id="searchBox" placeholder="搜索元器件…" style="display:none">
     <button class="btn btn-dark" id="btnNew" style="display:none" onclick="addRow()">+ 新增行</button>
     <button class="btn btn-blue" id="btnAI" style="display:none" onclick="openAIModal()">✦ AI 填入</button>
@@ -41,7 +40,7 @@
     <div class="home-layout">
       <!-- 左: 存入/使用滚轮 -->
       <div class="home-left">
-        <div class="panel-title">📜 存入 · 使用记录</div>
+        <div class="panel-title">📜 最近出入摘要</div>
         <div class="wheel" id="logWheel">
           <div class="wheel-placeholder">暂无操作记录</div>
         </div>
@@ -96,7 +95,11 @@
           </div>
           <div class="entry-btn" id="entryBomMatch" onclick="goBomMatch()">
             <div class="entry-icon">🧮</div>
-            <div class="entry-text">BOM匹配</div>
+            <div class="entry-text">BOM清单</div>
+          </div>
+          <div class="entry-btn" id="entryBomManage" onclick="goBomManage()">
+            <div class="entry-icon">📋</div>
+            <div class="entry-text">BOM清单管理</div>
           </div>
           <div class="entry-btn" id="entryBrand" onclick="goBrands()">
             <div class="entry-icon">🏷️</div>
@@ -107,12 +110,63 @@
             <div class="entry-text">补货提醒</div>
             <div class="entry-badge" id="lowStockBadge" style="display:none">0</div>
           </div>
+          <div class="entry-btn" id="entryLedger" onclick="goLedger()">
+            <div class="entry-icon">📒</div>
+            <div class="entry-text">出入账本</div>
+          </div>
+          <div class="entry-btn" id="entryGitSync" onclick="goGitSync()">
+            <div class="entry-icon">🌐</div>
+            <div class="entry-text">线上同步</div>
+            <div class="entry-badge" id="gitSyncBadge" style="display:none">0</div>
+          </div>
         </div>
       </div>
     </div>
   </section>
 
-  <!-- 分类界面 (第1级: 一级分类卡片) -->
+  <section id="ledgerPage" style="display:none">
+    <div class="detail-head"><h2>📒 出入账本</h2><span class="count-badge" id="ledgerCount">0 笔</span></div>
+    <div class="ledger-tools">
+      <label>开始 <input type="date" id="ledgerStart"></label>
+      <label>结束 <input type="date" id="ledgerEnd"></label>
+      <select id="ledgerAction"><option value="">全部记录</option><option value="录入">录入</option><option value="取出">取出</option><option value="调整">调整</option></select>
+      <button class="btn btn-blue" onclick="loadLedger()">🔍 查询</button>
+      <button class="btn btn-ghost" onclick="clearLedger()">🧹 清除账本</button>
+      <button class="btn btn-danger" onclick="undoSelectedLedger()">↩ 批量撤回所选</button>
+    </div>
+    <div class="ledger-list" id="ledgerList"><div class="wheel-placeholder">暂无出入库记录</div></div>
+  </section>
+  <section id="gitSyncPage" style="display:none">
+    <div class="detail-head"><h2>🌐 线上同步</h2><span class="count-badge" id="gitSyncState">未连接</span></div>
+    <div class="git-sync-layout">
+      <div class="panel git-sync-panel git-sync-read-panel">
+        <div class="panel-title">读取内容 <span class="file-hint" id="gitSyncProviderHint" style="margin-left:6px"></span></div>
+        <div class="file-hint">这里显示本次从当前远端读取到的新增事件，以及本机已经标记为已读的事件。</div>
+        <div class="git-sync-events" id="gitEventList">暂无</div>
+      </div>
+      <div class="git-sync-actions">
+        <div class="panel git-sync-panel">
+          <div class="panel-title">远端同步</div>
+          <div class="file-hint" id="gitSyncInfo">读取配置中…</div>
+          <div class="modal-actions">
+            <button class="btn btn-blue" onclick="runGitSync()">🔄 同步远端</button>
+            <button class="btn btn-ghost" onclick="openAIConfig(); setTimeout(() => switchSetTab('git'), 0)">⚙️ 同步设置</button>
+          </div>
+          <div class="file-hint">同步远端 = 拉取并读取当前平台的新增事件，不会提交本机账本。</div>
+          <div class="ai-status" id="gitSyncStatus"></div>
+        </div>
+        <div class="panel git-sync-panel">
+          <div class="panel-title">提交本机账本</div>
+          <div class="file-hint">本机产生的出入账本记录都会在这里列出。勾选后可提交新记录，也可把已提交记录作为新的线上事件再次提交。</div>
+          <div class="file-hint" id="syncPendingInfo">加载中…</div>
+          <div class="sync-pending-list" id="syncPendingList"></div>
+          <div class="modal-actions"><button class="btn btn-green" onclick="submitPendingLedger()">⬆ 提交所选账本记录</button></div>
+          <div class="ai-status" id="gitUploadStatus"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
   <section id="overviewPage" style="display:none">
     <div class="overview-head">
       <h1>分类总览</h1>
@@ -192,7 +246,7 @@
 
     <div class="tabs">
       <div class="tab active" id="wdTabManual" onclick="switchWdTab('manual')">📋 手动选择</div>
-      <div class="tab" id="wdTabImport" onclick="switchWdTab('import')">📥 导入BOM取出</div>
+          <div class="tab" id="wdTabImport" onclick="switchWdTab('import')">📥 导入/调用 BOM 清单</div>
     </div>
 
     <!-- 手动选择面板 -->
@@ -217,8 +271,19 @@
       <div class="ai-status" id="wdStatus"></div>
     </div>
 
-    <!-- 导入BOM取出面板 -->
+    <!-- 导入/调用 BOM 清单面板 -->
     <div id="wdPanelImport" style="display:none">
+      <div class="input-panel bom-saved-callout">
+        <div class="input-field">
+          <label>调用已保存的 BOM 清单</label>
+          <div class="dir-row">
+            <select id="wdBomListSel" style="flex:1" onchange="onWdBomListChange()"><option value="">— 选择 BOM 清单 —</option></select>
+            <input type="number" id="wdBomListCopies" min="1" step="1" value="1" style="width:90px" title="取出份数">
+            <button class="btn btn-orange" onclick="prepareSavedBom()">📤 按份数取出</button>
+          </div>
+          <div class="file-hint" id="wdBomListHint">保存过的 BOM 清单会绑定已确认的仓库型号，调用时只检查实时库存。</div>
+        </div>
+      </div>
       <div class="tabs2">
         <div class="tab2 active" id="wdTabPaste" onclick="switchWdImpMode('paste')">📋 粘贴文本</div>
         <div class="tab2" id="wdTabFile" onclick="switchWdImpMode('file')">📄 上传 Excel/txt</div>
@@ -289,10 +354,10 @@
     </div>
   </section>
 
-  <!-- BOM 匹配界面 (只读, 不扣数量) -->
+  <!-- BOM 清单界面：导入 EDA BOM、匹配仓库并保存 -->
   <section id="bomMatchPage" style="display:none">
     <div class="detail-head">
-      <h2>🧮 BOM 匹配</h2>
+      <h2>🧮 BOM 清单</h2>
       <span class="count-badge" id="bmCount"></span>
     </div>
     <div class="uncat-tools">
@@ -337,10 +402,13 @@
 
     <!-- 匹配结果 -->
     <div id="bmResult" style="display:none">
-      <div class="detail-head">
-        <h3>匹配结果</h3>
-        <span class="count-badge" id="bmMatchCount"></span>
-      </div>
+        <div class="detail-head">
+          <h3>匹配结果</h3>
+          <span class="count-badge" id="bmMatchCount"></span>
+          <button class="btn btn-ghost" onclick="goBomManage()">📋 管理已保存清单</button>
+          <input type="text" id="bmListName" placeholder="输入 BOM 清单名称" style="width:190px">
+          <button class="btn btn-green" style="padding:5px 16px" onclick="saveBomList()">💾 保存 BOM 清单</button>
+        </div>
       <div class="table-wrap">
         <table id="bmTable">
           <thead><tr><th>需求元件</th><th>封装</th><th>需数量</th><th style="min-width:340px">匹配库存（相似元件）</th><th>库存情况</th></tr></thead>
@@ -357,6 +425,36 @@
         </div>
       </div>
       <div class="ai-status" id="bmStatus"></div>
+    </div>
+  </section>
+
+  <!-- BOM 清单管理：查看、修改需求字段、删除清单 -->
+  <section id="bomManagePage" class="bom-manage-page" style="display:none">
+    <div class="detail-head">
+      <h2>📋 BOM 清单管理</h2>
+      <span class="count-badge" id="bomManageCount"></span>
+    </div>
+    <div class="input-panel">
+      <div class="input-field">
+        <label>选择已保存的 BOM 清单</label>
+        <div class="dir-row">
+          <select id="bomManageSel" style="flex:1" onchange="loadBomManageDetail()"><option value="">— 选择 BOM 清单 —</option></select>
+          <button class="btn btn-red" onclick="deleteBomManage()">🗑 删除清单</button>
+        </div>
+      </div>
+      <div class="ai-status" id="bomManageStatus"></div>
+    </div>
+    <div id="bomManageEditor" style="display:none">
+      <div class="detail-head">
+        <h3 id="bomManageTitle">清单内容</h3>
+        <button class="btn btn-green" onclick="saveBomManage()">💾 保存修改</button>
+      </div>
+      <div class="table-wrap">
+        <table id="bomManageTable">
+          <thead><tr><th>序号</th><th>需求名称/型号</th><th>品牌</th><th>封装</th><th>单板用量</th><th>规格参数</th><th>匹配状态</th><th>已绑定仓库物料</th></tr></thead>
+          <tbody id="bomManageBody"></tbody>
+        </table>
+      </div>
     </div>
   </section>
 
@@ -472,16 +570,27 @@
         <div class="file-hint" style="margin:-8px 0 14px 0">操作：空格=拍照，Backspace=撤回最近一张，回车=结束，ESC=取消；照片拍完自动识别，缓存立即删除</div>
         <div class="input-field">
           <label>或上传图片（可多选：料袋标签 / 元器件照片 / BOM 截图）</label>
-          <input type="file" id="ocrFile" accept=".png,.jpg,.jpeg,.webp,.bmp" multiple onchange="ocrUpload()">
-          <div class="file-hint">支持一次选择多张图片批量识别，识别结果合并后按模板整理</div>
+          <div class="input-actions ocr-upload-row">
+            <input type="file" id="ocrFile" accept=".png,.jpg,.jpeg,.webp,.bmp" multiple onchange="ocrUpload()">
+            <label class="ocr-workers-label" for="ocrWorkers">OCR线程</label>
+            <select id="ocrWorkers" class="form-select ocr-workers-select" title="选择图片 OCR 并发线程数">
+              <option value="0">自动</option>
+              <option value="1">1线程</option>
+              <option value="2">2线程</option>
+              <option value="4">4线程</option>
+              <option value="6">6线程</option>
+              <option value="8">8线程</option>
+            </select>
+          </div>
+          <div class="file-hint">支持一次选择多张图片批量识别；自动按本机 CPU 选择，或手动指定 1~8 线程</div>
         </div>
         <div class="ocr-preview" id="ocrPreview" style="display:none"><img id="ocrPreviewImg" alt="预览"></div>
         <div class="input-field">
-          <label>识别出的文字（可编辑后解析）</label>
+          <label>识别出的文字（图片/摄像头完成后自动解析，可编辑后重新解析）</label>
           <textarea id="ocrText" rows="6" placeholder="识别结果将显示在这里…"></textarea>
         </div>
         <div class="input-actions">
-          <button class="btn btn-blue" onclick="ocrParse()">🔍 识别文字 → AI 解析</button>
+          <button class="btn btn-blue" onclick="ocrParse()">🔍 重新 AI 解析</button>
         </div>
         <div class="ai-status" id="ocrStatus"></div>
       </div>
@@ -566,6 +675,7 @@
       <div class="tab2" id="setTabAI" onclick="switchSetTab('ai')">🤖 AI 设置</div>
       <div class="tab2" id="setTabUI" onclick="switchSetTab('ui')">🎨 界面设置</div>
       <div class="tab2" id="setTabData" onclick="switchSetTab('data')">🗑 数据管理</div>
+      <div class="tab2" id="setTabGit" onclick="switchSetTab('git')">🌐 线上同步</div>
     </div>
 
     <!-- Tab1: 数据路径 -->
@@ -709,7 +819,94 @@
       <div class="ai-status" id="setUIStatus"></div>
     </div>
 
-    <!-- Tab4: 数据管理 -->
+    <!-- Tab5: 线上同步 (Git / Gitee) -->
+    <div id="setPanelGit" style="display:none">
+      <p class="hint">线上同步把库存变动事件保存到远程仓库。写入库存前自动检测所选平台远端；浏览页面不同步，不拖慢界面。凭据由系统 Git Credential Manager / SSH 管理，本软件不保存 Token。</p>
+      <div class="input-field">
+        <label>同步平台（决定线上同步页和写入前检查使用哪个远端）</label>
+        <select id="syncProviderSel" onchange="saveSyncProvider()">
+          <option value="gitee">🌐 Gitee（国内，推荐）</option>
+          <option value="git">🔄 Git / GitHub</option>
+        </select>
+        <div class="file-hint">切换平台立即保存并生效；两个平台的仓库配置各自独立。</div>
+      </div>
+
+      <div class="sync-sub-block">
+        <div class="panel-title">🌐 Gitee 设置</div>
+        <div class="input-field">
+          <label>同步用户名</label>
+          <input type="text" id="giteeCfgUsername" placeholder="例如 张三，用于标记每条上传记录">
+        </div>
+        <div class="input-field">
+          <label>Gitee 仓库地址</label>
+          <input type="text" id="giteeCfgRemote" placeholder="https://gitee.com/用户名/仓库.git">
+        </div>
+        <div class="input-field">
+          <label>本地同步目录</label>
+          <div class="dir-row">
+            <input type="text" id="giteeCfgLocal" placeholder="例如 C:\Users\DJX\AppData\Local\parts-warehouse-sync">
+            <button class="btn btn-ghost" onclick="browseGitDir('giteeCfgLocal')">📁 浏览…</button>
+          </div>
+        </div>
+        <div class="dir-row">
+          <div class="input-field" style="flex:1">
+            <label>分支</label>
+            <input type="text" id="giteeCfgBranch" value="main">
+          </div>
+          <div class="input-field" style="flex:1">
+            <label>事件目录</label>
+            <input type="text" id="giteeCfgEvents" value="events">
+          </div>
+        </div>
+        <label class="check-row"><input type="checkbox" id="giteeCfgEnabled"> 启用 Gitee 增量同步</label>
+        <div class="ai-status" id="giteeCfgStatus"></div>
+        <div class="modal-actions">
+          <button class="btn btn-blue" onclick="saveGiteeConfig()">保存 Gitee 配置</button>
+        </div>
+      </div>
+
+      <div class="sync-sub-block">
+        <div class="panel-title">🔄 Git 设置</div>
+        <div class="input-field">
+          <label>同步用户名</label>
+          <input type="text" id="gitCfgUsername" placeholder="例如 张三，用于标记每条上传记录">
+        </div>
+        <div class="input-field">
+          <label>Git 仓库地址</label>
+          <input type="text" id="gitCfgRemote" placeholder="https://github.com/用户名/仓库.git">
+        </div>
+        <div class="input-field">
+          <label>本地同步目录</label>
+          <div class="dir-row">
+            <input type="text" id="gitCfgLocal" placeholder="例如 C:\Users\DJX\AppData\Local\parts-warehouse-sync">
+            <button class="btn btn-ghost" onclick="browseGitDir('gitCfgLocal')">📁 浏览…</button>
+          </div>
+        </div>
+        <div class="dir-row">
+          <div class="input-field" style="flex:1">
+            <label>分支</label>
+            <input type="text" id="gitCfgBranch" value="main">
+          </div>
+          <div class="input-field" style="flex:1">
+            <label>事件目录</label>
+            <input type="text" id="gitCfgEvents" value="events">
+          </div>
+        </div>
+        <label class="check-row"><input type="checkbox" id="gitCfgEnabled"> 启用 Git 增量同步</label>
+        <div class="ai-status" id="gitCfgStatus"></div>
+        <div class="modal-actions">
+          <button class="btn btn-blue" onclick="saveGitConfig()">保存 Git 配置</button>
+        </div>
+      </div>
+
+      <div class="modal-actions">
+        <button class="btn btn-ghost" onclick="inspectGitConfig()">🔍 检查配置</button>
+        <button class="btn btn-ghost" onclick="checkGitSync()">🔄 检测远端更新</button>
+      </div>
+      <div class="file-hint">「检查配置 / 检测远端更新」作用于上方选择的同步平台。</div>
+    </div>
+
+    <!-- Tab6: 数据管理 -->
     <div id="setPanelData" style="display:none">
       <p class="hint">快速删除仓库数据。删除操作不可撤销，请谨慎使用。</p>
       <div class="input-field">

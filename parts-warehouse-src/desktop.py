@@ -92,7 +92,7 @@ def main():
     threading.Thread(target=start_flask, daemon=True).start()
 
     webview.create_window(
-        "元器件仓库",
+        "TuangParts",
         "http://127.0.0.1:5000",
         width=1200,
         height=780,

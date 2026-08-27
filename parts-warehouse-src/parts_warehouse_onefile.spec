@@ -79,6 +79,8 @@ a = Analysis(
         "warehouse.ocr",
         "warehouse.withdraw_match",
         "warehouse.brands",
+        "warehouse.ledger",
+        "warehouse.git_sync",
         "openpyxl",
         "openpyxl.cell._writer",
         "openpyxl.styles",

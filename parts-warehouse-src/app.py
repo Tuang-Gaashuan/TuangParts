@@ -16,6 +16,8 @@
 """
 
 import os
+import uuid
+from urllib.parse import urlparse
 import threading
 import webbrowser
 import faulthandler
@@ -32,7 +34,9 @@ from warehouse.ai_fill import AIFiller, get_api_key
 from warehouse.settings import load_settings, save_settings, public_view, resolve_data_dir, chat_completions_url
 from warehouse.activity import record as record_activity
 from warehouse.activity import load as load_activity
+from warehouse import ledger
 from warehouse.batch_import import BatchParser
+from warehouse import git_sync
 
 # 数据/设置根目录:
 #   打包版 (desktop.py) 通过环境变量 PARTS_APP_DIR 指向 exe 旁目录;
@@ -53,6 +57,14 @@ app = Flask(
 def get_data_dir() -> str:
     """当前实际数据目录 (跟随用户设置, 支持运行时切换)。"""
     return resolve_data_dir(BASE_DIR)
+
+
+def activity_path(path: str):
+    """数据目录可能与源码不在同一盘，跨盘时保留绝对路径。"""
+    try:
+        return os.path.relpath(path, BASE_DIR)
+    except ValueError:
+        return os.path.abspath(path)
 
 
 def get_store() -> ExcelStore:
@@ -86,7 +98,219 @@ def index():
     return render_template("index.html")
 
 
-# ── API: 设置 (数据路径 / AI / 主题) ────────────────────
+def active_sync_cfg() -> dict:
+    """返回当前线上同步平台的配置 (sync_provider: git | gitee)。"""
+    s = load_settings(BASE_DIR)
+    prov = str(s.get("sync_provider", "gitee"))
+    if prov not in ("git", "gitee"):
+        prov = "gitee"
+    return dict(s.get(f"{prov}_sync") or {})
+
+
+def sync_config_error(cfg: dict) -> str:
+    """拒绝平台配置与远端主机错配，避免显示平台和实际连接目标不一致。"""
+    provider = str(load_settings(BASE_DIR).get("sync_provider", "gitee"))
+    host = urlparse(str(cfg.get("remote_url", "")).strip()).netloc.lower().split(":", 1)[0]
+    if not host:
+        return "当前平台尚未填写远端仓库地址"
+    if provider == "gitee" and ("github.com" in host or "githubusercontent.com" in host):
+        return "当前选择 Gitee，但远端地址是 GitHub，请填写 gitee.com 仓库地址"
+    if provider == "git" and "gitee.com" in host:
+        return "当前选择 GitHub，但远端地址是 Gitee，请填写 github.com 仓库地址"
+    return ""
+
+
+@app.route("/api/git-sync/inspect", methods=["POST"])
+def git_sync_inspect():
+    cfg = active_sync_cfg()
+    mismatch = sync_config_error(cfg)
+    if mismatch:
+        return jsonify({"ok": False, "message": mismatch})
+    return jsonify(git_sync.inspect_config(cfg))
+
+
+@app.route("/api/git-sync/check", methods=["POST"])
+def git_sync_check():
+    cfg = active_sync_cfg()
+    mismatch = sync_config_error(cfg)
+    if mismatch:
+        return jsonify({"ok": False, "message": mismatch})
+    if not cfg.get("enabled"):
+        return jsonify({"ok": False, "message": "线上同步尚未启用", "disabled": True})
+    result = git_sync.init_or_update(cfg)
+    if not result.get("ok"):
+        return jsonify(result)
+    events = git_sync.read_unread_event_files(cfg, mark_read=False)
+    if not events.get("ok"):
+        result["events_error"] = events.get("message", "事件读取失败")
+        result["event_count"] = 0
+    else:
+        result["event_count"] = events.get("count", 0)
+    return jsonify(result)
+
+
+@app.route("/api/git-sync/events", methods=["POST"])
+def git_sync_events():
+    cfg = active_sync_cfg()
+    mismatch = sync_config_error(cfg)
+    if mismatch:
+        return jsonify({"ok": False, "message": mismatch})
+    if not cfg.get("enabled"):
+        return jsonify({"ok": False, "message": "线上同步尚未启用", "disabled": True})
+    data = request.get_json(silent=True) or {}
+    result = git_sync.read_unread_event_files(cfg, str(data.get("since_commit", "")), mark_read=bool(data.get("mark_read", True)))
+    # 读取并标记后，把线上事件写入账本 (origin=remote)，与本地操作区分开
+    if result.get("ok") and result.get("events") and data.get("mark_read", True):
+        _apply_remote_events_to_ledger(cfg, result.get("events", []))
+        result["ledger_applied"] = len(result.get("events", []))
+    return jsonify(result)
+
+
+@app.route("/api/git-sync/upload", methods=["POST"])
+def git_sync_upload():
+    cfg = active_sync_cfg()
+    mismatch = sync_config_error(cfg)
+    if mismatch:
+        return jsonify({"ok": False, "message": mismatch})
+    if not cfg.get("enabled"):
+        return jsonify({"ok": False, "message": "请先在设置中启用线上同步", "disabled": True})
+    data = request.get_json(silent=True) or {}
+    data.setdefault("username", cfg.get("username", ""))
+    data.setdefault("event_version", 1)
+    data.setdefault("created_at", datetime.utcnow().isoformat() + "Z")
+    return jsonify(git_sync.upload_event(cfg, data))
+
+
+# ── 账本一键提交线上 ──────────────────────────────────────
+_OP_TO_ACTION = {"restock": "录入", "withdraw": "取出", "adjust": "调整"}
+
+
+def _apply_remote_events_to_ledger(cfg: dict, events: list) -> None:
+    """线上事件进入账本 (origin=remote)，与本地操作区分；只读展示，不修改库存。
+
+    兼容两种事件格式：新版 event_version=2 带 items 明细数组；旧版单条 part_id/delta。
+    """
+    for ev in events:
+        event_id = str(ev.get("event_id", "")).strip()
+        if ledger.has_event_id(get_data_dir(), event_id):
+            continue
+        items = ev.get("items")
+        if items:
+            details = [{
+                "subcat": str(it.get("subcat", "") or it.get("part_id", "")),
+                "name": str(it.get("name", "") or it.get("part_id", "")),
+                "delta": it.get("delta", 0),
+                "quantity_before": it.get("quantity_before"),
+                "quantity_after": it.get("quantity_after"),
+            } for it in items]
+        else:
+            details = [{
+                "subcat": str(ev.get("part_id", "")),
+                "name": str(ev.get("part_id", "")),
+                "delta": ev.get("delta", 0),
+                "quantity_before": ev.get("quantity_before"),
+                "quantity_after": ev.get("quantity_after"),
+            }]
+        ledger.append(
+            get_data_dir(),
+            _OP_TO_ACTION.get(str(ev.get("operation", "")), "调整"),
+            details,
+            operator=str(ev.get("username", "") or "线上"),
+            reason=str(ev.get("reason", "") or "线上同步事件"),
+            source="sync",
+            origin="remote",
+            event_id=event_id,
+        )
+
+
+@app.route("/api/sync/pending", methods=["GET"])
+def sync_pending():
+    """返回全部本机账本记录，供首次提交和重复提交使用。"""
+    cfg = active_sync_cfg()
+    all_records = ledger.load(get_data_dir(), limit=5000)
+    records = [r for r in all_records if r.get("origin", "local") == "local"]
+    return jsonify({
+        "ok": True,
+        "count": len(records),
+        "detail_count": sum(len(r.get("details", [])) for r in records),
+        "records": records,
+        "enabled": bool(cfg.get("enabled")),
+        "provider": str(load_settings(BASE_DIR).get("sync_provider", "gitee")),
+        "remote_url": str(cfg.get("remote_url", "")),
+        "config_error": sync_config_error(cfg),
+    })
+
+
+@app.route("/api/sync/submit", methods=["POST"])
+def sync_submit():
+    """把本机账本记录（可指定 record_ids，缺省全部）拆成事件提交到线上。"""
+    cfg = active_sync_cfg()
+    mismatch = sync_config_error(cfg)
+    if mismatch:
+        return jsonify({"ok": False, "message": mismatch})
+    if not cfg.get("enabled"):
+        return jsonify({"ok": False, "message": "请先在设置中启用线上同步", "disabled": True})
+    data = request.get_json(silent=True) or {}
+    wanted = [str(x).strip() for x in data.get("record_ids", []) if str(x).strip()]
+    all_records = ledger.load(get_data_dir(), limit=5000)
+    records = [r for r in all_records if r.get("origin", "local") == "local"]
+    if wanted:
+        records = [r for r in records if r["record_id"] in wanted]
+    if not records:
+        return jsonify({"ok": False, "message": "没有待提交的本机账本记录", "count": 0})
+    username = str(cfg.get("username", "") or "parts-warehouse")
+    events = []
+    record_event_ids: dict[str, list] = {}
+    for rec in records:
+        rec_hex = str(rec["record_id"]).replace("ledger-", "")
+        details = rec.get("details", []) or []
+        op = {"录入": "restock", "取出": "withdraw", "调整": "adjust", "撤回": "adjust"}.get(str(rec.get("action", "")), "adjust")
+        # 每次提交都生成新的事件 ID；重复提交不能覆盖原事件文件。
+        ev_id = f"evt-{rec_hex}-{uuid.uuid4().hex[:8]}"
+        items = []
+        for d in details:
+            part = str(d.get("subcat", "")).strip()
+            nm = str(d.get("name", "")).strip()
+            part_id = f"{part}|{nm}" if part and nm else (part or nm or f"row{d.get('row', '')}")
+            items.append({
+                "part_id": part_id,
+                "subcat": part,
+                "name": nm,
+                "delta": int(d.get("delta", 0) or 0),
+                "quantity_before": d.get("quantity_before"),
+                "quantity_after": d.get("quantity_after"),
+            })
+        events.append({
+            "event_id": ev_id,
+            "event_version": 2,
+            "operation": op,
+            "username": username,
+            "created_at": str(rec.get("time", "")),
+            "reason": str(rec.get("reason", "") or rec.get("action", "")),
+            "items": items,
+        })
+        record_event_ids[rec["record_id"]] = [ev_id]
+    result = git_sync.upload_events(cfg, events)
+    if not result.get("ok"):
+        return jsonify(result)
+    marked = 0
+    for rec_id, ids in record_event_ids.items():
+        if ledger.mark_submitted(get_data_dir(), rec_id, ids):
+            marked += 1
+    # 推进同步游标，防止刚提交的事件被自己读回重复记入账本
+    try:
+        git_sync.read_unread_event_files(cfg, mark_read=True)
+    except Exception:
+        pass
+    return jsonify({
+        "ok": True,
+        "message": result.get("message", "已提交"),
+        "submitted": marked,
+        "events": len(events),
+        "paths": result.get("paths", []),
+    })
+
+
 @app.route("/api/settings", methods=["GET"])
 def settings_get():
     s = load_settings(BASE_DIR)
@@ -130,6 +354,28 @@ def settings_post():
         if not new_ai["api_key"] and cur_ai.get("api_key") and new_ai["provider"] != "ollama":
             new_ai["api_key"] = cur_ai["api_key"]
         patch["ai"] = new_ai
+    if "sync_provider" in data:
+        v = str(data.get("sync_provider") or "gitee").strip().lower()
+        patch["sync_provider"] = v if v in ("git", "gitee") else "gitee"
+    for sync_key in ("git_sync", "gitee_sync"):
+        if sync_key in data and isinstance(data[sync_key], dict):
+            g = data[sync_key]
+            patch[sync_key] = {
+                "enabled": bool(g.get("enabled", False)),
+                "remote_url": (g.get("remote_url") or "").strip(),
+                "local_dir": (g.get("local_dir") or "").strip(),
+                "branch": (g.get("branch") or "main").strip() or "main",
+                "events_dir": (g.get("events_dir") or "events").strip() or "events",
+                "username": (g.get("username") or "").strip(),
+            }
+    candidate_provider = str(patch.get("sync_provider", load_settings(BASE_DIR).get("sync_provider", "gitee")))
+    candidate_cfg = patch.get(f"{candidate_provider}_sync")
+    if candidate_cfg:
+        host = urlparse(candidate_cfg["remote_url"]).netloc.lower().split(":", 1)[0]
+        if candidate_provider == "gitee" and ("github.com" in host or "githubusercontent.com" in host):
+            return jsonify({"ok": False, "message": "Gitee 配置不能填写 GitHub 仓库地址，请检查远端地址"}), 400
+        if candidate_provider == "git" and "gitee.com" in host:
+            return jsonify({"ok": False, "message": "GitHub 配置不能填写 Gitee 仓库地址，请检查远端地址"}), 400
     s = save_settings(BASE_DIR, patch)
     view = public_view(s)
     view["resolved_data_dir"] = get_data_dir()
@@ -304,6 +550,16 @@ def save():
     old_headers, old_rows = store.load(name)
     path = store.save(name, [lb for _, lb in fields], rows)
     record_activity(data_dir, name, old_rows, rows, path=os.path.relpath(path, BASE_DIR))
+    changed = []
+    for i, row in enumerate(rows):
+        old = old_rows[i] if i < len(old_rows) else []
+        oldq = ledger.parse_qty(old[3]) if len(old) > 3 else 0
+        newq = ledger.parse_qty(row[3]) if len(row) > 3 else 0
+        if oldq != newq:
+            changed.append({"subcat": name, "row": i, "name": row[0] if row else "", "delta": newq - oldq, "quantity_before": oldq, "quantity_after": newq})
+    if changed:
+        ledger.append(data_dir, "调整", changed, reason="编辑库存表", source="table")
+
     from warehouse import undo as undo_mod
     undo_mod.push(data_dir, [{"subcat": name, "old_rows": old_rows}], "保存修改")
     return jsonify({"ok": True, "saved": len(rows), "path": os.path.relpath(path, BASE_DIR)})
@@ -365,13 +621,67 @@ def withdraw():
         return jsonify({"error": "取出数量必须大于 0"}), 400
 
     path = store.save(name, [label for _, label in fields_for(name)], new_rows)
-    record_activity(data_dir, name, old_rows, new_rows, path=os.path.relpath(path, BASE_DIR))
+    record_activity(data_dir, name, old_rows, new_rows, path=activity_path(path))
     from warehouse import undo as undo_mod
-    undo_mod.push(data_dir, [{"subcat": name, "old_rows": old_rows}], "取出")
+    undo_entry = undo_mod.push(data_dir, [{"subcat": name, "old_rows": old_rows}], "取出")
+    ledger.append(data_dir, "取出", [{**d, "delta": -int(d["taken"]), "quantity_before": ledger.parse_qty(old_rows[d["row"]][3]), "quantity_after": ledger.parse_qty(new_rows[d["row"]][3]), "subcat": name} for d in detail], reason="库存取出", source="withdraw", undo_id=undo_entry.get("undo_id"))
     return jsonify({"ok": True, "subcat": name, "taken": taken_total, "items": detail})
 
 
-# ── API: BOM 取出匹配 (替换料机制) ─────────────────────
+@app.route("/api/withdraw/batch", methods=["POST"])
+def withdraw_batch():
+    """跨多个子分类一次取出，只生成一笔账本和一个撤回快照。"""
+    data = request.get_json(force=True) or {}
+    groups = data.get("groups") or {}
+    if not isinstance(groups, dict) or not groups:
+        return jsonify({"error": "未选择要取出的元件"}), 400
+    store = get_store()
+    data_dir = get_data_dir()
+    snapshots, updates, details = [], [], []
+    taken_total = 0
+    for raw_name, items in groups.items():
+        name = str(raw_name or "").strip()
+        if not name or primary_owner(name) is None:
+            return jsonify({"error": f"未知子分类: {name}"}), 404
+        if not isinstance(items, list) or not items:
+            return jsonify({"error": f"「{name}」没有有效取出明细"}), 400
+        headers, old_rows = store.load(name)
+        new_rows = [list(row) for row in old_rows]
+        group_details = []
+        for item in items:
+            try:
+                row_index = int(item.get("row", -1))
+                take = int(float(str(item.get("qty", 0)).strip()))
+            except (TypeError, ValueError):
+                return jsonify({"error": f"「{name}」的取出数量无效"}), 400
+            if row_index < 0 or row_index >= len(new_rows) or take <= 0:
+                return jsonify({"error": f"「{name}」存在无效取出明细"}), 400
+            row = new_rows[row_index]
+            current = ledger.parse_qty(row[3] if len(row) > 3 else 0)
+            if take > current:
+                label = str(row[0] or f"第{row_index + 1}行") if row else f"第{row_index + 1}行"
+                return jsonify({"error": f"「{label}」库存不足: 当前 {current} 件, 要取出 {take} 件"}), 400
+            row[3] = str(current - take)
+            group_details.append({"row": row_index, "name": row[0] if row else "", "taken": take,
+                                  "delta": -take, "quantity_before": current,
+                                  "quantity_after": current - take, "subcat": name})
+        snapshots.append({"subcat": name, "old_rows": old_rows})
+        updates.append((name, old_rows, new_rows))
+        details.extend(group_details)
+        taken_total += sum(d["taken"] for d in group_details)
+    for name, old_rows, new_rows in updates:
+        path = store.save(name, [label for _, label in fields_for(name)], new_rows)
+        record_activity(data_dir, name, old_rows, new_rows, path=activity_path(path))
+    from warehouse import undo as undo_mod
+    undo_entry = undo_mod.push(data_dir, snapshots, "取出")
+    ledger_entry = ledger.append(data_dir, "取出", details, reason="BOM 清单取出",
+                                 source="withdraw-batch", undo_id=undo_entry.get("undo_id"))
+    return jsonify({"ok": True, "taken": taken_total, "lines": len(details),
+                    "subcats": len(updates), "undo_id": undo_entry.get("undo_id"),
+                    "record_id": ledger_entry.get("record_id")})
+
+
+# ── BOM 取出匹配 (替换料机制) ─────────────────────
 @app.route("/api/withdraw/match", methods=["POST"])
 def withdraw_match():
     """对 BOM 解析结果匹配现有库存。
@@ -386,6 +696,137 @@ def withdraw_match():
     results = match_items(items, get_data_dir())
     matched = sum(1 for r in results if r["candidates"])
     return jsonify({"ok": True, "results": results, "matched": matched, "total": len(results)})
+
+
+# -- API: BOM 清单 (匹配结果持久化, 不直接改库存) --
+@app.route("/api/bom-lists", methods=["GET"])
+def bom_lists_get():
+    from warehouse.bom_lists import list_lists
+    return jsonify({"ok": True, "items": list_lists(get_data_dir())})
+
+
+@app.route("/api/bom-lists/<list_id>/prepare", methods=["POST"])
+def bom_list_prepare(list_id):
+    """读取已保存 BOM，按份数生成绑定库存行的实时取出结果。"""
+    from warehouse.bom_lists import get_list
+    from warehouse.withdraw_match import match_items
+    item = get_list(get_data_dir(), list_id)
+    if not item:
+        return jsonify({"error": "BOM 清单不存在"}), 404
+    try:
+        copies = int((request.get_json(force=True) or {}).get("copies", 1))
+    except (TypeError, ValueError):
+        copies = 0
+    if copies < 1:
+        return jsonify({"error": "份数必须是大于等于 1 的整数"}), 400
+
+    store = get_store()
+    results = []
+    def _same_cell(actual, expected):
+        return str(actual or "").strip() == str(expected or "").strip()
+
+    for saved in item.get("items", []):
+        req = dict(saved.get("item") or {})
+        try:
+            req["qty"] = str(int(float(str(req.get("qty", 0)))) * copies)
+        except (TypeError, ValueError):
+            req["qty"] = "0"
+        selected = saved.get("selected") or {}
+        subcat = str(selected.get("subcat") or "").strip()
+        try:
+            row_index = int(selected.get("row", -1))
+        except (TypeError, ValueError):
+            row_index = -1
+        candidates = []
+        if subcat and primary_owner(subcat) is not None:
+            _, rows = store.load(subcat)
+            snapshot = selected.get("snapshot") or {}
+            if not (0 <= row_index < len(rows)) or (
+                snapshot and any(
+                    not _same_cell(rows[row_index][idx] if len(rows[row_index]) > idx else "", snapshot.get(key, ""))
+                    for idx, key in ((0, "name"), (1, "brand"), (2, "package"), (6, "spec"))
+                )
+            ):
+                row_index = next((i for i, row in enumerate(rows) if all(
+                    _same_cell(row[idx] if len(row) > idx else "", snapshot.get(key, ""))
+                    for idx, key in ((0, "name"), (1, "brand"), (2, "package"), (6, "spec"))
+                )), -1)
+            if 0 <= row_index < len(rows):
+                row = rows[row_index]
+                candidates = [{
+                    "subcat": subcat, "row": row_index,
+                    "name": str(row[0] or "") if len(row) > 0 else "",
+                    "brand": str(row[1] or "") if len(row) > 1 else "",
+                    "package": str(row[2] or "") if len(row) > 2 else "",
+                    "qty": str(row[3] or "") if len(row) > 3 else "",
+                    "spec": str(row[6] or "") if len(row) > 6 else "",
+                    "match_type": "exact", "pkg_note": "",
+                }]
+        results.append({"item": req, "candidates": candidates, "saved_selected": selected})
+    return jsonify({"ok": True, "results": results, "copies": copies, "name": item.get("name", "")})
+
+
+@app.route("/api/bom-lists/<list_id>", methods=["GET"])
+def bom_list_get(list_id):
+    from warehouse.bom_lists import get_list
+    item = get_list(get_data_dir(), list_id)
+    if not item:
+        return jsonify({"error": "BOM 清单不存在"}), 404
+    return jsonify({"ok": True, "item": item})
+
+
+@app.route("/api/bom-lists", methods=["POST"])
+def bom_list_save():
+    from warehouse.bom_lists import save_list
+    payload = request.get_json(force=True) or {}
+    rows = payload.get("items") or []
+    if not rows:
+        return jsonify({"error": "BOM 清单至少需要一条物料"}), 400
+    store = get_store()
+    normalized = []
+    for entry in rows:
+        entry = dict(entry or {})
+        selected = dict(entry.get("selected") or {})
+        subcat = str(selected.get("subcat") or "").strip()
+        try:
+            row_index = int(selected.get("row", -1))
+        except (TypeError, ValueError):
+            row_index = -1
+        # 缺料行允许保存：保留完整 EDA BOM，selected 为空表示待补料。
+        if not subcat:
+            entry["selected"] = {}
+            normalized.append(entry)
+            continue
+        if primary_owner(subcat) is None:
+            return jsonify({"error": f"未知仓库子分类: {subcat}"}), 400
+        _, inventory = store.load(subcat)
+        if row_index < 0 or row_index >= len(inventory):
+            return jsonify({"error": f"仓库物料行无效: {subcat} 第 {row_index + 1} 行"}), 400
+        row = inventory[row_index]
+        selected["row"] = row_index
+        selected["snapshot"] = {
+            "name": str(row[0] or "") if len(row) > 0 else "",
+            "brand": str(row[1] or "") if len(row) > 1 else "",
+            "package": str(row[2] or "") if len(row) > 2 else "",
+            "qty": str(row[3] or "") if len(row) > 3 else "",
+            "spec": str(row[6] or "") if len(row) > 6 else "",
+        }
+        entry["selected"] = selected
+        normalized.append(entry)
+    payload["items"] = normalized
+    try:
+        item = save_list(get_data_dir(), payload)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify({"ok": True, "item": item})
+
+
+@app.route("/api/bom-lists/<list_id>", methods=["DELETE"])
+def bom_list_delete(list_id):
+    from warehouse.bom_lists import delete_list
+    if not delete_list(get_data_dir(), list_id):
+        return jsonify({"error": "BOM 清单不存在"}), 404
+    return jsonify({"ok": True})
 
 
 @app.route("/api/addstock", methods=["POST"])
@@ -427,9 +868,10 @@ def addstock():
         return jsonify({"error": "增加数量必须大于 0"}), 400
 
     path = store.save(name, [label for _, label in fields_for(name)], new_rows)
-    record_activity(data_dir, name, old_rows, new_rows, path=os.path.relpath(path, BASE_DIR))
+    record_activity(data_dir, name, old_rows, new_rows, path=activity_path(path))
     from warehouse import undo as undo_mod
-    undo_mod.push(data_dir, [{"subcat": name, "old_rows": old_rows}], "增加库存")
+    undo_entry = undo_mod.push(data_dir, [{"subcat": name, "old_rows": old_rows}], "增加库存")
+    ledger.append(data_dir, "录入", [{**d, "delta": int(d["added"]), "quantity_before": ledger.parse_qty(old_rows[d["row"]][3]), "quantity_after": ledger.parse_qty(new_rows[d["row"]][3]), "subcat": name} for d in detail], reason="库存录入", source="addstock", undo_id=undo_entry.get("undo_id"))
     return jsonify({"ok": True, "subcat": name, "added": added_total, "items": detail})
 
 
@@ -449,7 +891,7 @@ def subcat_merge():
     if removed <= 0:
         return jsonify({"ok": True, "removed": 0, "before": len(old_rows), "after": len(new_rows)})
     path = store.save(name, [label for _, label in fields_for(name)], new_rows)
-    record_activity(data_dir, name, old_rows, new_rows, path=os.path.relpath(path, BASE_DIR))
+    record_activity(data_dir, name, old_rows, new_rows, path=activity_path(path))
     from warehouse import undo as undo_mod
     undo_mod.push(data_dir, [{"subcat": name, "old_rows": old_rows}], "合并重复")
     return jsonify({"ok": True, "removed": removed, "before": len(old_rows), "after": len(new_rows)})
@@ -468,7 +910,7 @@ def _clear_all_data(data_dir: str) -> dict:
         if os.path.isdir(p):
             shutil.rmtree(p)
             cleared["categories"].append(name)
-        elif name == "activity_log.jsonl":
+        elif name in ("activity_log.jsonl", "ledger.jsonl"):
             os.remove(p)
             cleared["activity"] = True
         else:
@@ -492,9 +934,12 @@ def data_clear():
         return jsonify({"ok": True, "scope": "unclassified", "cleared": n})
     if scope == "activity":
         p = os.path.join(data_dir, "activity_log.jsonl")
+        removed = []
         if os.path.exists(p):
             os.remove(p)
-        return jsonify({"ok": True, "scope": "activity"})
+            removed.append("activity_log.jsonl")
+        return jsonify({"ok": True, "scope": "activity", "removed": removed,
+                        "message": "主页操作摘要已清除，出入账本未改动"})
     return jsonify({"error": "未知操作"}), 400
 
 
@@ -544,6 +989,121 @@ def undo_apply():
         return jsonify({"error": "该操作不存在或已撤回"}), 404
     return jsonify({"ok": True, "action": entry.get("action", ""),
                     "restored": entry.get("restored", [])})
+
+
+@app.route("/api/ledger")
+def ledger_api():
+    records = ledger.load(get_data_dir(), request.args.get("start", ""), request.args.get("end", ""), request.args.get("action", ""))
+    # 撤回记录是审计事件，不单独占一行；原始业务操作行显示当前状态。
+    records = [r for r in records if r.get("action") != "撤回"]
+    return jsonify({"records": records})
+
+
+@app.route("/api/ledger/undo", methods=["POST"])
+def ledger_undo():
+    data = request.get_json(force=True) or {}
+    undo_id = (data.get("undo_id") or "").strip()
+    if not undo_id:
+        return jsonify({"error": "缺少账本记录编号"}), 400
+    data_dir = get_data_dir()
+    source_record = next((x for x in ledger.load(data_dir)
+                          if x.get("undo_id") == undo_id and x.get("action") in ("录入", "取出", "调整")), None)
+    if not source_record or source_record.get("origin") == "remote":
+        return jsonify({"error": "该账本记录不存在或不可撤回"}), 404
+    requested = data.get("items") or []
+    requested_indexes = {int(x.get("detail_index")) for x in requested
+                         if isinstance(x, dict) and str(x.get("detail_index", "")).lstrip("-").isdigit()}
+    requested_keys = {(str(x.get("subcat", "")), int(x.get("row", -1)))
+                      for x in requested if isinstance(x, dict)}
+    selected = []
+    for detail_index, detail in enumerate(source_record.get("details") or []):
+        key = (str(detail.get("subcat", "")), int(detail.get("row", -1)))
+        if detail.get("status", "正常") != "正常":
+            continue
+        if requested_indexes:
+            if detail_index not in requested_indexes:
+                continue
+        elif requested_keys and key not in requested_keys:
+            continue
+        detail = dict(detail)
+        detail["detail_index"] = detail_index
+        selected.append(detail)
+    if not selected:
+        return jsonify({"error": "所选明细已撤回或不存在"}), 400
+    from warehouse import undo as undo_mod
+    try:
+        result = undo_mod.apply_operation(data_dir, undo_id, selected, "undo")
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    if not result or not result.get("items"):
+        return jsonify({"error": "撤回失败，未找到有效明细"}), 400
+    updates = {}
+    for item in result["items"]:
+        updates[f"index:{item['detail_index']}"] = {"status": "已撤回", "note": "已撤回"}
+    ledger.update_details(data_dir, source_record.get("record_id", ""), updates)
+    ledger.append(data_dir, "已撤回", result["items"], reason=f"撤回 {undo_id}", source="ledger-undo", undo_id=undo_id)
+    current = next((x for x in ledger.load(data_dir) if x.get("record_id") == source_record.get("record_id")), source_record)
+    return jsonify({"ok": True, "status": current.get("status", "部分撤回"),
+                    "restored": result["items"], "record_id": source_record.get("record_id")})
+
+
+@app.route("/api/ledger/restore", methods=["POST"])
+def ledger_restore():
+    data = request.get_json(force=True) or {}
+    undo_id = (data.get("undo_id") or "").strip()
+    if not undo_id:
+        return jsonify({"error": "缺少账本记录编号"}), 400
+    data_dir = get_data_dir()
+    source_record = next((x for x in ledger.load(data_dir)
+                          if x.get("undo_id") == undo_id and x.get("action") in ("录入", "取出", "调整")), None)
+    if not source_record or source_record.get("origin") == "remote":
+        return jsonify({"error": "该账本记录不存在或不可恢复"}), 404
+    requested = data.get("items") or []
+    requested_indexes = {int(x.get("detail_index")) for x in requested
+                         if isinstance(x, dict) and str(x.get("detail_index", "")).lstrip("-").isdigit()}
+    requested_keys = {(str(x.get("subcat", "")), int(x.get("row", -1)))
+                      for x in requested if isinstance(x, dict)}
+    selected = []
+    for detail_index, detail in enumerate(source_record.get("details") or []):
+        key = (str(detail.get("subcat", "")), int(detail.get("row", -1)))
+        if detail.get("status", "正常") != "已撤回":
+            continue
+        if requested_indexes:
+            if detail_index not in requested_indexes:
+                continue
+        elif requested_keys and key not in requested_keys:
+            continue
+        detail = dict(detail)
+        detail["detail_index"] = detail_index
+        selected.append(detail)
+    if not selected:
+        return jsonify({"error": "所选明细未处于已撤回状态"}), 400
+    from warehouse import undo as undo_mod
+    try:
+        result = undo_mod.apply_operation(data_dir, undo_id, selected, "restore")
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    if not result or not result.get("items"):
+        return jsonify({"error": "取消撤回失败，未找到有效明细"}), 400
+    updates = {}
+    for item in result["items"]:
+        updates[f"index:{item['detail_index']}"] = {"status": "正常", "note": ""}
+    ledger.update_details(data_dir, source_record.get("record_id", ""), updates)
+    ledger.append(data_dir, "取消撤回", result["items"], reason=f"取消撤回 {undo_id}", source="ledger-restore", undo_id=undo_id)
+    current = next((x for x in ledger.load(data_dir) if x.get("record_id") == source_record.get("record_id")), source_record)
+    return jsonify({"ok": True, "status": current.get("status", "正常"),
+                    "restored": result["items"], "record_id": source_record.get("record_id")})
+
+
+@app.route("/api/ledger/clear", methods=["POST"])
+def ledger_clear():
+    data_dir = get_data_dir()
+    p = os.path.join(data_dir, "ledger.jsonl")
+    removed = []
+    if os.path.exists(p):
+        os.remove(p)
+        removed.append("ledger.jsonl")
+    return jsonify({"ok": True, "removed": removed, "message": "出入账本已清除，主页摘要未改动"})
 
 
 # ── API: 浏览页 (统计 + 日志 + 低库存) ─────────────────
@@ -683,25 +1243,140 @@ def ocr_recognize():
         return jsonify({"error": f"OCR 识别失败: {str(e)[:200]}"}), 500
 
 
+@app.route("/api/ocr/batch", methods=["POST"])
+def ocr_recognize_batch():
+    """一次上传多张图片并并发 OCR; workers=0 按本机 CPU 自动选择。"""
+    from concurrent.futures import ThreadPoolExecutor
+
+    files = request.files.getlist("files")
+    if not files:
+        return jsonify({"error": "未收到图片"}), 400
+    allowed = (".png", ".jpg", ".jpeg", ".webp", ".bmp")
+    invalid = [f.filename or "" for f in files
+               if not (f.filename or "").lower().endswith(allowed)]
+    if invalid:
+        return jsonify({"error": "仅支持 png/jpg/webp/bmp 图片"}), 400
+
+    data = request.form
+    try:
+        requested = int(data.get("workers", "0") or 0)
+    except (TypeError, ValueError):
+        return jsonify({"error": "线程数必须是 0~8 的整数"}), 400
+    if requested < 0 or requested > 8:
+        return jsonify({"error": "线程数必须是 0~8 的整数"}), 400
+
+    import os
+    cpu_count = os.cpu_count() or 2
+    auto_workers = min(8, max(1, cpu_count // 2))
+    workers = auto_workers if requested == 0 else requested
+    workers = min(workers, len(files))
+
+    try:
+        from warehouse.ocr import recognize
+        image_bytes = [f.read() for f in files]
+        if workers == 1:
+            groups = [recognize(raw) for raw in image_bytes]
+        else:
+            with ThreadPoolExecutor(max_workers=workers) as executor:
+                groups = list(executor.map(recognize, image_bytes))
+        return jsonify({
+            "ok": True,
+            "groups": groups,
+            "lines": [line for group in groups for line in group],
+            "workers": workers,
+            "workers_requested": requested,
+            "workers_auto": auto_workers,
+        })
+    except Exception as e:
+        return jsonify({"error": f"OCR 识别失败: {str(e)[:200]}"}), 500
+
+
+def _format_by_rules(text: str):
+    """对格式清楚的 OCR 文本做本地整理, 返回文本或 None。"""
+    from warehouse.rules import RuleParser
+
+    groups = []
+    current = []
+    for raw in (text or "").splitlines():
+        line = raw.strip()
+        if line.startswith("【图"):
+            if current:
+                groups.append(current)
+                current = []
+            continue
+        if line:
+            current.append(line)
+    if current:
+        groups.append(current)
+    if not groups:
+        groups = [[line.strip()] for line in (text or "").splitlines() if line.strip()]
+
+    items = []
+    for group in groups:
+        parser = RuleParser()
+        item = parser.parse_line(" ".join(group))
+        if not item or not item.get("name") or not item.get("cat_key"):
+            return None
+        items.append(item)
+    if not items:
+        return None
+
+    def line_for(item):
+        values = [item.get("qty", ""), item.get("name", ""),
+                  item.get("brand", ""), item.get("package", ""),
+                  item.get("spec", ""), item.get("subcat", "")]
+        return " ".join(str(value).strip() for value in values if str(value).strip())
+
+    return "\n".join(line_for(item) for item in items)
+
+
 @app.route("/api/ocr/format", methods=["POST"])
 def ocr_format():
-    """把 OCR 识别文本按料袋模板整理 (数量 型号 品牌 封装 电气参数 器件名称)。"""
+    """把 OCR 识别文本按料袋模板整理, 优先本地规则, 复杂文本再调用 AI。"""
     data = request.get_json(force=True) or {}
     text = (data.get("text") or "").strip()
     if not text:
         return jsonify({"error": "没有可整理的文本"}), 400
+
+    try:
+        local_text = _format_by_rules(text)
+    except Exception:
+        local_text = None
+    if local_text:
+        return jsonify({"ok": True, "text": local_text, "source": "rules"})
+
     cfg = get_ai_cfg()
     if not cfg:
         return jsonify({"error": "未配置 AI 接口，无法自动整理"}), 400
     try:
         from warehouse.ocr import format_text
         out = format_text(text, cfg)
-        return jsonify({"ok": True, "text": out})
+        return jsonify({"ok": True, "text": out, "source": "ai"})
     except Exception as e:
         return jsonify({"error": f"整理失败: {str(e)[:200]}"}), 500
 
 
-# ── API: 摄像头拍照识别 ────────────────────────────────
+@app.route("/api/ocr/parse_text", methods=["POST"])
+def ocr_parse_text():
+    """把 OCR 文本直接解析成核对表条目。
+
+    图片/摄像头流程只需要一次结构化 AI 调用；旧的 /api/ocr/format
+    保留给手动整理和兼容旧客户端。
+    """
+    data = request.get_json(force=True, silent=True) or {}
+    text = (data.get("text") or "").strip()
+    if not text:
+        return jsonify({"error": "没有可解析的 OCR 文本"}), 400
+    cfg = get_ai_cfg()
+    if not cfg:
+        return jsonify({"error": "未配置 AI 接口，请到「设置 → AI」填写 API Key"}), 400
+    try:
+        parser = BatchParser(cfg["api_key"], cfg["base_url"], cfg["model"])
+        items = parser.parse_ocr_groups(text)
+        return jsonify({"ok": True, "items": items, "dropped_nc": parser.dropped_nc,
+                        "usage": parser.usage})
+    except Exception as e:
+        return jsonify({"error": str(e)[:300]}), 500
 def _camera_names() -> list:
     """用 Windows PnP 枚举摄像头设备友好名, 顺序与 DirectShow 索引一致。
 

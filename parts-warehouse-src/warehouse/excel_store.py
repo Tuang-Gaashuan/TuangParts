@@ -16,6 +16,8 @@ import os
 from openpyxl import Workbook, load_workbook
 from warehouse.config import CATEGORIES, fields_for, safe_filename, primary_owner
 
+_STATS_CACHE = {}
+
 
 class ExcelStore:
     """子分类 -> Excel 文件的读写层。"""
@@ -107,16 +109,54 @@ class ExcelStore:
         return sum(n for _, n in self.subcats_with_data(key))
 
     def all_overview(self) -> dict:
-        """总览: {一级分类key: 该分类记录总数}, 只含有数据的分类。
-
-        未分类 (data/未分类/未分类.xlsx) 有数据时作为一级分类附加。
-        """
-        result = {key: self.category_total(key) for key in CATEGORIES}
+        """总览: {一级分类key: 该分类记录总数}, 只含有数据的分类。"""
+        counts = {subcat: len(rows) for subcat, rows in self._cached_stats_rows().items() if rows}
+        result = {key: sum(counts.get(subcat, 0) for subcat in CATEGORIES[key][1]) for key in CATEGORIES}
         from warehouse import unclassified
         n = unclassified.count(self.data_dir)
         if n > 0:
             result["unclassified"] = n
         return result
+
+    def _stats_fingerprint(self):
+        files = []
+        for root, _, names in os.walk(self.data_dir):
+            for name in names:
+                if name.lower().endswith(".xlsx"):
+                    p = os.path.join(root, name)
+                    try:
+                        st = os.stat(p)
+                        files.append((os.path.relpath(p, self.data_dir), st.st_mtime_ns, st.st_size))
+                    except OSError:
+                        pass
+        return tuple(sorted(files))
+
+    def _read_stats_rows(self):
+        rows_by_subcat = {}
+        for subcat in self._all_physical_subcats():
+            path = self.subcat_path(subcat)
+            if not os.path.exists(path):
+                continue
+            headers, rows = self.load(subcat)
+            rows_by_subcat[subcat] = rows
+        return rows_by_subcat
+
+    def _all_physical_subcats(self):
+        seen = set()
+        for key in CATEGORIES:
+            for subcat in CATEGORIES[key][1]:
+                if subcat not in seen:
+                    seen.add(subcat)
+                    yield subcat
+
+    def _cached_stats_rows(self):
+        key = (self.data_dir, self._stats_fingerprint())
+        cached = _STATS_CACHE.get(self.data_dir)
+        if cached and cached[0] == key[1]:
+            return cached[1]
+        rows = self._read_stats_rows()
+        _STATS_CACHE[self.data_dir] = (key[1], rows)
+        return rows
 
     # ── 全局统计 ────────────────────────────────────────
     def all_subcat_counts(self) -> dict:
@@ -129,34 +169,26 @@ class ExcelStore:
         return result
 
     def global_stats(self) -> dict:
-        """浏览页统计: 分类数 / 子分类数 / 总条目 / 总数量 / 最多的子分类。"""
-        subcat_counts = self.all_subcat_counts()
-        # 有数据的一级分类数 (all_overview 含未分类)
-        cat_count = sum(1 for total in self.all_overview().values() if total > 0)
-        # 未分类元件数 (计入总条目, 不参与 top 统计)
+        """浏览页统计，按 Excel 文件指纹缓存，避免每次打开首页重复读取全部库存。"""
+        rows_by_subcat = self._cached_stats_rows()
+        subcat_counts = {subcat: len(rows) for subcat, rows in rows_by_subcat.items() if rows}
         from warehouse import unclassified
         uncat_n = unclassified.count(self.data_dir)
-        # 总数量: 每个有数据子分类文件的 qty 列(索引3)求和
         total_qty = 0
-        for subcat in subcat_counts:
-            _, rows = self.load(subcat)
+        for rows in rows_by_subcat.values():
             for r in rows:
                 try:
                     total_qty += int(float(str(r[3]).strip()))
                 except (ValueError, IndexError, TypeError):
                     pass
-        # 最多的元器件种类: 条目数最多的子分类
-        top = None
-        top_n = -1
-        for subcat, n in subcat_counts.items():
-            if n > top_n:
-                top, top_n = subcat, n
+        cat_count = len({primary_owner(subcat) for subcat in subcat_counts}) + (1 if uncat_n else 0)
+        top = max(subcat_counts.items(), key=lambda item: item[1], default=None)
         return {
-            "categories": cat_count,                      # 有数据的一级分类数 (含未分类)
-            "subcats": len(subcat_counts),                # 有数据的子分类数
-            "items": sum(subcat_counts.values()) + uncat_n,  # 总条目数 (含未分类)
-            "total_qty": total_qty,                        # 总数量
-            "top_subcat": {"name": top, "count": top_n} if top else None,
+            "categories": cat_count,
+            "subcats": len(subcat_counts),
+            "items": sum(subcat_counts.values()) + uncat_n,
+            "total_qty": total_qty,
+            "top_subcat": {"name": top[0], "count": top[1]} if top else None,
         }
 
     # 补货规则: 一级分类key -> 提醒阈值 (qty < 阈值 时提醒)
@@ -172,12 +204,12 @@ class ExcelStore:
         按一级分类的补货规则计算 (工具类跳过, 单片机阈值2, 其余默认10)。
         """
         result = []
-        for subcat in self.all_subcat_counts():
+        rows_by_subcat = self._cached_stats_rows()
+        for subcat, rows in rows_by_subcat.items():
             owner = primary_owner(subcat)
             if owner in self.LOW_STOCK_RULES and self.LOW_STOCK_RULES[owner] is None:
                 continue  # 该分类明确不参与补货提醒 (如工具类)
             eff_threshold = self.LOW_STOCK_RULES.get(owner) or threshold
-            _, rows = self.load(subcat)
             for r in rows:
                 if len(r) < 4:
                     continue

@@ -56,13 +56,36 @@ function hideToolbar(ids) {
 }
 
 function hideAllPages() {
-  for (const id of ["homePage", "overviewPage", "subcatPage", "detailPage", "lowstockPage", "unclassifiedPage", "withdrawPage", "inputPage", "bomMatchPage", "brandsPage", "brandDetailPage"]) {
+  for (const id of ["homePage", "overviewPage", "subcatPage", "detailPage", "lowstockPage", "unclassifiedPage", "withdrawPage", "inputPage", "bomMatchPage", "bomManagePage", "brandsPage", "brandDetailPage", "gitSyncPage", "ledgerPage"]) {
     document.getElementById(id).style.display = "none";
   }
 }
 
-// ── 统一导航 ───────────────────────────
-// page: 'home' | 'categories' | 'category:<key>' | 'subcat:<name>' | 'lowstock' | 'input'
+async function checkGitBeforeInventory(page) {
+  // 页面浏览不再触发网络同步；保留此函数名兼容 Git 页面之外的旧调用。
+  return true;
+}
+
+async function ensureGitBeforeWrite() {
+  try {
+    const s = currentSettings || await api("/api/settings");
+    currentSettings = s;
+    const prov = s.sync_provider === "gitee" ? "gitee_sync" : "git_sync";
+    const g = s[prov] || {};
+    if (!g.enabled) return true;
+    const r = await api("/api/git-sync/check", { method: "POST" });
+    if (!r.ok) {
+      showToast(`远端未同步，已阻止写入：${r.message || "检查失败"}`, 4500);
+      return false;
+    }
+    return true;
+  } catch (e) {
+    showToast(`线上同步失败，已阻止写入：${e.message}`, 4500);
+    return false;
+  }
+}
+
+// ── 页面跳转前的库存增量同步检测 ──────────
 async function render(page, push = true) {
   if (push) pageStack.push(page);
   document.getElementById("btnBack").style.display =
@@ -79,8 +102,11 @@ async function render(page, push = true) {
   else if (page === "lowstock")   await renderLowStock();
   else if (page === "withdraw")   await renderWithdraw();
   else if (page === "bommatch")   await renderBomMatch();
+  else if (page === "bommanage")  await renderBomManage();
   else if (page === "input")      await renderInput();
   else if (page === "brands")     await renderBrands();
+  else if (page === "gitsync")    await renderGitSync();
+  else if (page === "ledger")     await renderLedger();
   else if (page.startsWith("brand:")) await renderBrandDetail(page.slice(6));
 }
 
@@ -91,7 +117,10 @@ function goLowStock()    { render("lowstock"); }
 function goInput()       { render("input"); }
 function goWithdraw()    { render("withdraw"); }
 function goBomMatch()    { render("bommatch"); }
+function goBomManage()   { render("bommanage"); }
 function goBrands()      { render("brands"); }
+function goGitSync()     { render("gitsync"); }
+function goLedger()      { render("ledger"); }
 function goCategory(key) { render("category:" + key); }
 function goSubcat(name)  { render("subcat:" + name); }
 function goBrand(name)   { render("brand:" + name); }
@@ -103,7 +132,260 @@ function goBack() {
   render(prev, false);
 }
 
-// ── 首页: 浏览仪表盘 ────────────────────
+async function renderLedger() {
+  document.getElementById("ledgerPage").style.display = "";
+  await loadLedger();
+}
+
+async function loadLedger() {
+  const qs = new URLSearchParams();
+  for (const [id, key] of [["ledgerStart", "start"], ["ledgerEnd", "end"], ["ledgerAction", "action"]]) {
+    const v = document.getElementById(id).value;
+    if (v) qs.set(key, v);
+  }
+  const data = await api(`/api/ledger?${qs}`);
+  const rows = data.records || [];
+  document.getElementById("ledgerCount").textContent = `${rows.length} 笔`;
+  const list = document.getElementById("ledgerList");
+  if (!rows.length) { list.innerHTML = '<div class="wheel-placeholder">暂无符合条件的出入库记录</div>'; return; }
+  const thead = `<thead><tr><th class="col-cb">选择</th><th>时间</th><th>动作</th><th>状态</th><th>来源</th><th>数量</th><th>操作者</th><th>原因</th><th>明细</th><th class="col-op">操作</th></tr></thead>`;
+  const body = rows.map((r, idx) => {
+    const cls = r.action === "录入" ? "ledger-in" : (r.action === "取出" ? "ledger-out" : "ledger-adjust");
+    const isRemote = r.origin === "remote";
+    const badge = isRemote
+      ? '<span class="ledger-origin ledger-origin-remote">🌐 线上</span>'
+      : (r.sync_status === "submitted"
+          ? '<span class="ledger-origin ledger-origin-sub">⬆ 已提交</span>'
+          : '<span class="ledger-origin ledger-origin-local">🖥️ 本机</span>');
+    const state = r.status || "正常";
+    const isUndone = state === "已撤回" || state === "部分撤回";
+    const isOriginalAction = ["录入", "取出", "调整"].includes(r.action);
+    const hasNormalDetails = (r.details || []).some(d => (d.status || "正常") === "正常");
+    const hasUndoneDetails = (r.details || []).some(d => d.status === "已撤回");
+    const canUndo = !!r.undo_id && !isRemote && isOriginalAction && hasNormalDetails;
+    const canRestore = !!r.undo_id && !isRemote && isOriginalAction && hasUndoneDetails;
+    const cbMode = canRestore && !canUndo ? "restore" : "undo";
+    const cb = `<input type="checkbox" class="ledger-select" data-mode="${cbMode}" data-undo-id="${escHtml(r.undo_id || "")}" ${canUndo || canRestore ? "" : "disabled"}>`;
+    const undoWhole = canUndo && canRestore
+      ? `<button class="btn btn-danger btn-mini" onclick="undoLedgerWhole('${escHtml(r.undo_id || "")}')">↩ 撤回剩余</button><button class="btn btn-restore btn-mini" onclick="restoreLedgerWhole('${escHtml(r.undo_id || "")}')">↪ 取消已撤回</button>`
+      : (canUndo
+          ? `<button class="btn btn-danger btn-mini" onclick="undoLedgerWhole('${escHtml(r.undo_id || "")}')">↩ 整笔撤回</button>`
+          : (canRestore ? `<button class="btn btn-restore btn-mini" onclick="restoreLedgerWhole('${escHtml(r.undo_id || "")}')">↪ 取消撤回</button>` : ""));
+    const stateHtml = isUndone
+      ? `<span class="ledger-state ledger-state-undone">${escHtml(state)}</span>`
+      : `<span class="ledger-state ledger-state-active">正常</span>`;
+    const total = r.total_delta > 0 ? `+${r.total_delta}` : (r.total_delta || 0);
+    const details = (r.details || []).map((d, di) => {
+      const detailState = d.status || "正常";
+      const detailCanUndo = canUndo && detailState === "正常";
+      const detailCanRestore = canRestore && detailState === "已撤回";
+      const dcb = detailCanUndo || detailCanRestore
+        ? `<input type="checkbox" class="ledger-item-select" data-mode="${detailCanRestore ? "restore" : "undo"}" data-undo-id="${escHtml(r.undo_id || "")}" data-subcat="${escHtml(d.subcat || "")}" data-row="${d.row ?? di}" data-detail-index="${di}">`
+        : "";
+      const itemBtn = detailCanUndo
+        ? `<button class="btn btn-danger btn-mini" onclick="undoLedgerItem('${escHtml(r.undo_id || "")}','${escHtml(d.subcat || "")}','${d.row ?? di}',${di})">↩ 撤回</button>`
+        : (detailCanRestore ? `<button class="btn btn-restore btn-mini" onclick="restoreLedgerItem('${escHtml(r.undo_id || "")}','${escHtml(d.subcat || "")}','${d.row ?? di}',${di})">↪ 取消撤回</button>` : "");
+      return `<tr><td class="col-cb">${dcb}</td><td>${escHtml(d.subcat || "")}</td><td>${escHtml(d.name || "")}</td><td class="ld-num">${d.delta > 0 ? "+" : ""}${d.delta}</td><td class="ld-num">${d.quantity_before ?? ""} → ${d.quantity_after ?? ""}</td><td><span class="ledger-detail-state ${detailState === "正常" ? "ledger-detail-active" : "ledger-detail-undone"}">${escHtml(detailState)}</span>${d.note ? ` <span class="ld-note">${escHtml(d.note)}</span>` : ""}</td><td class="col-op">${itemBtn}</td></tr>`;
+    }).join("") || '<tr><td class="col-cb"></td><td colspan="6" class="ld-empty">无明细</td></tr>';
+    return `<tr class="ledger-row ${cls}" onclick="toggleLedger(${idx})"><td class="col-cb" onclick="event.stopPropagation()">${cb}</td>
+      <td class="ld-time">${escHtml((r.time || "").slice(0, 16).replace("T", " "))}</td>
+      <td class="ld-action">${escHtml(r.action || "调整")}</td>
+      <td>${stateHtml}</td>
+      <td>${badge}</td>
+      <td class="ld-num ld-total">${total}</td>
+      <td>${escHtml(r.operator || "未设置")}</td>
+      <td class="ld-reason" title="${escHtml(r.reason || "")}">${escHtml(r.reason || "")}</td>
+      <td class="ld-detail-btn">${(r.details || []).length} 项 <span class="ld-toggle-hint">▾</span></td>
+      <td class="col-op" onclick="event.stopPropagation()">${undoWhole}</td>
+    </tr>
+    <tr class="ld-detail-wrap" id="ledgerDetail${idx}"><td colspan="10"><table class="ledger-detail-table"><thead><tr><th class="col-cb">选择</th><th>子分类</th><th>名称</th><th>数量变化</th><th>变化前 → 变化后</th><th>状态 / 备注</th><th class="col-op">操作</th></tr></thead><tbody>${details}</tbody></table></td></tr>`;
+  }).join("");
+  list.innerHTML = `<div class="ledger-table-wrap"><table class="ledger-table">${thead}<tbody>${body}</tbody></table></div>`;
+}
+
+function toggleLedger(idx) {
+  const el = document.getElementById(`ledgerDetail${idx}`);
+  el.classList.toggle("open");
+  const btn = el.previousElementSibling.querySelector(".ld-toggle-hint");
+  if (btn) btn.textContent = el.classList.contains("open") ? "▴" : "▾";
+}
+
+async function undoLedgerWhole(undoId) {
+  if (!undoId) return;
+  if (!confirm("撤回这笔完整操作（恢复该操作涉及的全部物料数量）？")) return;
+  await undoLedger(undoId);
+}
+
+async function undoLedgerItem(undoId, subcat, row, detailIndex = null) {
+  if (!undoId) return;
+  if (!confirm(`撤回这笔操作中的「${subcat}」这一项？`)) return;
+  await undoLedger(undoId, [{ subcat, row: Number(row), detail_index: detailIndex }]);
+}
+
+async function restoreLedgerWhole(undoId) {
+  if (!undoId) return;
+  if (!confirm("取消撤回这笔操作（恢复该操作已撤回的全部明细）？")) return;
+  await restoreLedger(undoId);
+}
+
+async function restoreLedgerItem(undoId, subcat, row, detailIndex = null) {
+  if (!undoId) return;
+  if (!confirm(`取消撤回「${subcat}」这一项？`)) return;
+  await restoreLedger(undoId, [{ subcat, row: Number(row), detail_index: detailIndex }]);
+}
+
+async function restoreLedger(undoId, items = [], skipSync = false) {
+  if (!undoId) return;
+  if (!skipSync && !await ensureGitBeforeWrite()) return;
+  const result = await api("/api/ledger/restore", {method: "POST", body: JSON.stringify({undo_id: undoId, items})});
+  toast(result.ok ? `已${result.status === "正常" ? "取消撤回" : result.status}` : (result.error || "取消撤回失败"));
+  if (result.ok) await loadLedger();
+}
+
+async function undoLedger(undoId, items = [], skipSync = false) {
+  if (!undoId) return;
+  if (!skipSync && !await ensureGitBeforeWrite()) return;
+  const result = await api("/api/ledger/undo", {method: "POST", body: JSON.stringify({undo_id: undoId, items})});
+  toast(result.ok ? `已${result.status || "撤回"}` : (result.error || "撤回失败"));
+  if (result.ok) await loadLedger();
+}
+
+async function undoSelectedLedger() {
+  const grouped = {undo: {}, restore: {}};
+  document.querySelectorAll(".ledger-item-select:checked").forEach(el => {
+    const mode = el.dataset.mode || "undo";
+    (grouped[mode][el.dataset.undoId] ||= []).push({subcat: el.dataset.subcat, row: Number(el.dataset.row), detail_index: Number(el.dataset.detailIndex)});
+  });
+  const whole = {undo: [], restore: []};
+  document.querySelectorAll(".ledger-select:checked").forEach(el => {
+    const mode = el.dataset.mode || "undo";
+    whole[mode].push(el.dataset.undoId);
+  });
+  const wholeCount = whole.undo.length + whole.restore.length;
+  const itemCount = Object.values(grouped.undo).reduce((s, a) => s + a.length, 0) + Object.values(grouped.restore).reduce((s, a) => s + a.length, 0);
+  if (!wholeCount && !itemCount) { showToast("请先勾选要操作的账本记录（行首勾选=整笔，展开后勾选=单项）"); return; }
+  if (!confirm(`确定执行所选：${wholeCount} 笔整笔、${itemCount} 个单项？`)) return;
+  if (!await ensureGitBeforeWrite()) return;
+  for (const id of whole.undo) await undoLedger(id, [], true);
+  for (const id of whole.restore) await restoreLedger(id, [], true);
+  for (const [id, items] of Object.entries(grouped.undo)) if (!whole.undo.includes(id)) await undoLedger(id, items, true);
+  for (const [id, items] of Object.entries(grouped.restore)) if (!whole.restore.includes(id)) await restoreLedger(id, items, true);
+}
+
+async function clearHomeLogs() {
+  if (!confirm("清除主页最近出入摘要？不会修改库存，也不会清除出入账本。")) return;
+  const result = await api("/api/data/clear", {
+    method: "POST", body: JSON.stringify({scope: "activity"}),
+  });
+  toast(result.message || "已清除");
+  const wheel = document.getElementById("logWheel");
+  if (wheel) wheel.innerHTML = '<div class="wheel-placeholder">暂无操作记录<br>保存元器件后这里会显示存入/使用情况</div>';
+}
+async function clearLedger() {
+  if (!confirm("清除全部出入账本记录？不会修改库存，也不会清除主页摘要。")) return;
+  const result = await api("/api/ledger/clear", {method: "POST"});
+  toast(result.message || "账本已清除");
+  await loadLedger();
+}
+
+async function renderGitSync() {
+  document.getElementById("gitSyncPage").style.display = "";
+  const s = currentSettings || await api("/api/settings");
+  currentSettings = s;
+  const prov = s.sync_provider === "gitee" ? "gitee" : "git";
+  const g = s[`${prov}_sync`] || {};
+  const provName = prov === "gitee" ? "🌐 Gitee" : "🔄 Git";
+  document.getElementById("gitSyncProviderHint").textContent = `当前平台：${provName}`;
+  document.getElementById("gitSyncInfo").textContent = g.configured
+    ? `${g.remote_url} · ${g.branch || "main"} · 用户：${g.username || "未设置"}`
+    : "尚未配置所选平台的同步信息，请先在设置 → 线上同步中填写仓库地址和本地目录。";
+  document.getElementById("gitSyncState").textContent = g.enabled ? "已启用" : "未启用";
+  document.getElementById("gitSyncStatus").textContent = "";
+  document.getElementById("gitUploadStatus").textContent = "";
+  document.getElementById("gitEventList").textContent = "暂无本次同步事件";
+  loadPendingLedger();
+}
+
+async function runGitSync() {
+  const state = document.getElementById("gitSyncStatus");
+  state.textContent = "正在同步远端…首次同步可能需要克隆仓库。";
+  try {
+    const r = await api("/api/git-sync/check", { method: "POST" });
+    state.textContent = r.ok
+      ? `✅ ${r.message === "Git 没有新提交" ? "远端已是最新，没有新提交" : r.message}`
+      : `❌ ${r.message}`;
+    document.getElementById("gitSyncState").textContent = r.ok ? "已连接" : "失败";
+    if (r.ok) {
+      const ev = await api("/api/git-sync/events", { method: "POST", body: JSON.stringify({ mark_read: true }) });
+      const list = document.getElementById("gitEventList");
+      if (ev.ok && ev.events.length) {
+        list.textContent = ev.events.map(x => `${x.event_id} · ${x.operation} · ${x.part_id} · ${x.delta} · ${x.username || ""}`).join("\n");
+      } else {
+        const known = (ev.known_ids || []).filter(Boolean);
+        list.textContent = known.length
+          ? `远端没有新的未读事件\n本机已读取 ${known.length} 条：${known.join("、")}`
+          : "远端没有新的未读事件，本机暂无已读记录";
+      }
+      list.style.whiteSpace = "pre-line";
+    }
+  } catch (e) { state.textContent = `❌ 同步失败: ${e.message}`; }
+}
+
+async function loadPendingLedger() {
+  const info = document.getElementById("syncPendingInfo");
+  const list = document.getElementById("syncPendingList");
+  try {
+    const d = await api("/api/sync/pending");
+    if (!d.enabled) {
+      info.textContent = "线上同步未启用，请在设置 → 线上同步中启用当前平台。";
+      list.innerHTML = "";
+      return;
+    }
+    if (d.config_error) {
+      info.textContent = `配置错误：${d.config_error}`;
+      list.innerHTML = "";
+      return;
+    }
+    if (!d.count) {
+      info.textContent = "本机暂无账本记录。";
+      list.innerHTML = "";
+      return;
+    }
+    info.textContent = `本机账本 ${d.count} 笔（共 ${d.detail_count} 条物料明细）· 平台：${d.provider === "gitee" ? "Gitee" : "GitHub"}`;
+    list.innerHTML = (d.records || []).map(r => {
+      const sign = r.total_delta > 0 ? "+" : "";
+      const state = r.sync_status === "submitted" ? "⬆ 已提交，可重复提交" : "🖥️ 待提交";
+      return `<label class="sync-pending-item"><input type="checkbox" class="sync-record-check" value="${escHtml(r.record_id)}" checked><span class="sp-time">${escHtml((r.time || "").slice(0, 16).replace("T", " "))}</span><span class="sp-action">${escHtml(r.action || "调整")}</span><span class="sp-total">${sign}${r.total_delta || 0} 件</span><span class="sp-detail">${(r.details || []).length} 项</span><span class="sp-status">${state}</span></label>`;
+    }).join("");
+  } catch (e) {
+    info.textContent = `加载失败: ${e.message}`;
+  }
+}
+
+async function submitPendingLedger() {
+  const status = document.getElementById("gitUploadStatus");
+  const info = document.getElementById("syncPendingInfo");
+  if (!confirm("将当前勾选的本机账本记录提交为线上事件；已提交记录也会作为新事件再次提交，继续吗？")) return;
+  const recordIds = [...document.querySelectorAll(".sync-record-check:checked")].map(el => el.value);
+  if (!recordIds.length) { status.textContent = "⚠️ 请先勾选要提交的账本记录"; return; }
+  status.textContent = "正在提交并推送…";
+  try {
+    const r = await api("/api/sync/submit", { method: "POST", body: JSON.stringify({ record_ids: recordIds }) });
+    if (!r.ok) { status.textContent = `❌ ${r.message}`; return; }
+    status.textContent = `✅ ${r.message}：${r.submitted} 笔账本 → ${r.events} 条事件`;
+    const list = document.getElementById("gitEventList");
+    const lines = (r.paths || []).map(p => `⬆ 已上传：${p.split("/").pop()}`);
+    if (lines.length) {
+      list.textContent = lines.join("\n");
+      list.style.whiteSpace = "pre-line";
+    }
+    info.textContent = "已提交，列表正在刷新…";
+    await loadPendingLedger();
+  } catch (e) {
+    status.textContent = `❌ 提交失败: ${e.message}`;
+  }
+}
+
 async function renderHome() {
   document.getElementById("homePage").style.display = "";
   const data = await api("/api/dashboard");
@@ -292,6 +574,7 @@ async function assignUnclassified() {
   const subcat = document.getElementById("uncatSubcatSel").value;
   if (!indices.length) { statusEl.textContent = "请先勾选要归类的元件"; return; }
   if (!catKey || !subcat) { statusEl.textContent = "请选择一级分类和子分类"; return; }
+  if (!await ensureGitBeforeWrite()) { statusEl.textContent = "远端未同步，已取消归类"; return; }
   statusEl.textContent = "归类中…";
   const res = await api("/api/unclassified/assign", {
     method: "POST", body: JSON.stringify({ indices, cat_key: catKey, subcat }),
@@ -322,6 +605,7 @@ async function renderWithdraw() {
   document.getElementById("wdCount").textContent = "";
   document.getElementById("wdBody").innerHTML =
     '<tr><td colspan="7"><div class="empty-hint">先选择一级分类和子分类</div></td></tr>';
+  loadWdBomLists();
 }
 
 async function onWdCatChange() {
@@ -390,6 +674,7 @@ async function doWithdraw() {
     if (qty > 0) items.push({ row, qty });
   });
   if (!items.length) { statusEl.textContent = "请勾选元件并填写取出数量"; return; }
+  if (!await ensureGitBeforeWrite()) { statusEl.textContent = "远端未同步，已取消取出"; return; }
   statusEl.textContent = "取出中…";
   const res = await api("/api/withdraw", {
     method: "POST", body: JSON.stringify({ name, items }),
@@ -542,8 +827,9 @@ function renderWdMatch(results) {
   let matched = 0, noStock = 0;
   results.forEach((r, idx) => {
     const it = r.item;
+    const savedSubcat = (r.saved_selected || {}).subcat || "";
     const need = `${escHtml(it.name)}${it.spec ? " " + escHtml(it.spec) : ""}`;
-    if (!r.candidates.length) {
+    if (!savedSubcat && !r.candidates.length) {
       noStock++;
       const tr = document.createElement("tr");
       tr.innerHTML = `<td>${need}</td><td>${escHtml(it.spec)}</td><td>${escHtml(it.package)}</td><td>${escHtml(it.qty)}</td>`;
@@ -551,7 +837,6 @@ function renderWdMatch(results) {
       return;
     }
     matched++;
-    // 库存情况 (三色: 充足/可替代/不足) — 与 BOM匹配 同一套判定
     const needQty = bmParseQty(it.qty) || 1;
     const exacts = r.candidates.filter((c) => c.match_type === "exact");
     const sims = r.candidates.filter((c) => c.match_type !== "exact");
@@ -570,14 +855,16 @@ function renderWdMatch(results) {
     let hasExact = r.candidates.some((c) => c.match_type === "exact");
     r.candidates.forEach((c, ci) => {
       const isExact = c.match_type === "exact";
+      const available = bmParseQty(c.qty);
+      const canTake = available >= needQty;
       const warn = isExact ? "" : `<span class="wdm-warn">⚠️ ${escHtml(c.pkg_note || "型号/封装不同")}</span>`;
       choiceHtml += `
-        <label class="wdm-choice${isExact ? "" : " wdm-similar"}">
-          <input type="radio" name="wdm${idx}" value="${escHtml(c.subcat)}|||${c.row}"${(isExact && !hasExact) || (!hasExact && ci === 0) ? " checked" : ""}>
+        <label class="wdm-choice${isExact ? "" : " wdm-similar"}${canTake ? "" : " wdm-unavailable"}">
+          <input type="radio" name="wdm${idx}" value="${escHtml(c.subcat)}|||${c.row}"${(hasExact ? ci === 0 && isExact : ci === 0) && canTake ? " checked" : ""}${canTake ? "" : " disabled"}>
           <span class="wdm-info">${escHtml(c.name)} | ${escHtml(c.brand || "—")} | ${escHtml(c.spec || "—")} | 库存 ${escHtml(c.qty)}</span>
           <span class="wdm-subcat">${escHtml(c.subcat)}</span>
           ${warn}
-          <input type="number" class="wdm-qty" min="1" value="${escHtml(it.qty)}" style="width:64px">
+          <input type="number" class="wdm-qty" min="1" value="${escHtml(it.qty)}" style="width:64px"${canTake ? "" : " disabled"}>
         </label>`;
     });
     tr.innerHTML = `
@@ -593,7 +880,7 @@ function renderWdMatch(results) {
   document.getElementById("wdNoStock").style.display = noStock ? "" : "none";
 }
 
-// ── BOM 匹配 (只读, 不扣数量) ─────────────────
+// ── BOM 清单 (导入、匹配、保存，不直接扣数量) ───────
 function renderBomMatch() {
   document.getElementById("bomMatchPage").style.display = "";
   document.getElementById("bmResult").style.display = "none";
@@ -670,6 +957,145 @@ async function bmParseFileRules() {
   await bmMatchItems(data.items, data.dropped_nc || 0, null);
 }
 
+let bmLastResults = [];
+let bmLastSource = "";
+let bomManageItem = null;
+
+async function renderBomManage() {
+  const page = document.getElementById("bomManagePage");
+  page.style.display = "";
+  document.getElementById("bomManageEditor").style.display = "none";
+  const sel = document.getElementById("bomManageSel");
+  const data = await api("/api/bom-lists");
+  sel.innerHTML = '<option value="">— 选择 BOM 清单 —</option>';
+  (data.items || []).forEach((it) => {
+    const opt = document.createElement("option"); opt.value = it.id;
+    opt.textContent = `${it.name}（${it.count} 项）`; sel.appendChild(opt);
+  });
+  document.getElementById("bomManageCount").textContent = `${(data.items || []).length} 份清单`;
+}
+
+async function loadBomManageDetail() {
+  const id = document.getElementById("bomManageSel").value;
+  const editor = document.getElementById("bomManageEditor");
+  if (!id) { editor.style.display = "none"; bomManageItem = null; return; }
+  const data = await api(`/api/bom-lists/${encodeURIComponent(id)}`);
+  if (!data.ok) { document.getElementById("bomManageStatus").textContent = `❌ ${data.error}`; return; }
+  bomManageItem = data.item;
+  document.getElementById("bomManageTitle").textContent = `${bomManageItem.name}（${bomManageItem.items.length} 项）`;
+  const body = document.getElementById("bomManageBody"); body.innerHTML = "";
+  bomManageItem.items.forEach((entry, i) => {
+    const req = entry.item || {}, selected = entry.selected || {}, snap = selected.snapshot || {};
+    const tr = document.createElement("tr");
+    tr.dataset.index = i;
+    tr.innerHTML = `<td>${i + 1}</td>
+      <td><input data-key="name" value="${escHtml(req.name || "")}"></td>
+      <td><input data-key="brand" value="${escHtml(req.brand || "")}"></td>
+      <td><input data-key="package" value="${escHtml(req.package || "")}"></td>
+      <td><input data-key="qty" type="number" min="0" value="${escHtml(req.qty || "")}"></td>
+      <td><input data-key="spec" value="${escHtml(req.spec || "")}"></td>
+      <td>${selected.subcat ? "✅ 已匹配" : "⏳ 未匹配/待补料"}</td>
+      <td>${selected.subcat ? `${escHtml(selected.subcat)} / ${escHtml(snap.name || "")}` : "—"}</td>`;
+    body.appendChild(tr);
+  });
+  editor.style.display = "";
+}
+
+async function saveBomManage() {
+  if (!bomManageItem) return;
+  const name = prompt("清单名称", bomManageItem.name);
+  if (name === null || !name.trim()) return;
+  document.querySelectorAll("#bomManageBody tr").forEach((tr) => {
+    const i = Number(tr.dataset.index), req = bomManageItem.items[i].item || {};
+    tr.querySelectorAll("input[data-key]").forEach((input) => { req[input.dataset.key] = input.value; });
+    bomManageItem.items[i].item = req;
+  });
+  bomManageItem.name = name.trim();
+  const res = await api("/api/bom-lists", { method: "POST", body: JSON.stringify(bomManageItem) });
+  const status = document.getElementById("bomManageStatus");
+  if (!res.ok) { status.textContent = `❌ ${res.error}`; return; }
+  status.textContent = `✅ 已保存「${bomManageItem.name}」的修改`;
+  await renderBomManage();
+  showToast("BOM 清单修改已保存");
+}
+
+async function deleteBomManage() {
+  const sel = document.getElementById("bomManageSel"), id = sel.value;
+  if (!id) { document.getElementById("bomManageStatus").textContent = "请先选择 BOM 清单"; return; }
+  const name = sel.options[sel.selectedIndex].textContent;
+  if (!confirm(`确定删除 ${name}？对应 Excel 文件也会删除。`)) return;
+  const res = await api(`/api/bom-lists/${encodeURIComponent(id)}`, { method: "DELETE" });
+  if (!res.ok) { document.getElementById("bomManageStatus").textContent = `❌ ${res.error}`; return; }
+  bomManageItem = null;
+  document.getElementById("bomManageEditor").style.display = "none";
+  document.getElementById("bomManageStatus").textContent = "✅ BOM 清单已删除";
+  await renderBomManage();
+  loadWdBomLists();
+  showToast("BOM 清单已删除");
+}
+
+function saveBomList() {
+  const name = document.getElementById("bmListName").value.trim();
+  const statusEl = document.getElementById("bmStatus");
+  if (!name) { statusEl.textContent = "请先输入 BOM 清单名称"; return; }
+  if (!bmLastResults.length) { statusEl.textContent = "没有可保存的匹配结果"; return; }
+  const items = [];
+  for (const [idx, r] of bmLastResults.entries()) {
+    const radio = document.querySelector(`#bmTable input[name="bmc${idx}"]:checked`);
+    if (!radio) {
+      items.push({ item: r.item, selected: {} });
+    } else {
+      const [subcat, row] = radio.value.split("|||");
+      items.push({ item: r.item, selected: { subcat, row: Number(row) } });
+    }
+  }
+  api("/api/bom-lists", {
+    method: "POST",
+    body: JSON.stringify({ name, source: bmLastSource, items }),
+  }).then((res) => {
+    if (!res.ok) { statusEl.textContent = `❌ ${res.error}`; return; }
+    const missing = items.filter((x) => !x.selected.subcat).length;
+    statusEl.textContent = `✅ BOM 清单「${name}」已保存${missing ? `，其中 ${missing} 项未匹配，已保留待补料` : ""}，可在取出页调用`;
+    showToast("BOM 清单已保存");
+    loadWdBomLists();
+  });
+}
+
+async function loadWdBomLists() {
+  const sel = document.getElementById("wdBomListSel");
+  if (!sel) return;
+  const data = await api("/api/bom-lists");
+  sel.innerHTML = '<option value="">— 选择 BOM 清单 —</option>';
+  (data.items || []).forEach((it) => {
+    const opt = document.createElement("option");
+    opt.value = it.id;
+    opt.textContent = `${it.name}（${it.count} 项）`;
+    sel.appendChild(opt);
+  });
+}
+
+function onWdBomListChange() {
+  const sel = document.getElementById("wdBomListSel");
+  const hint = document.getElementById("wdBomListHint");
+  hint.textContent = sel.value ? "已选择清单，填写份数后点击按份数取出。系统会重新核验实时库存。" : "保存过的 BOM 清单会绑定已确认的仓库型号，调用时只检查实时库存。";
+}
+
+async function prepareSavedBom() {
+  const listId = document.getElementById("wdBomListSel").value;
+  const copies = parseInt(document.getElementById("wdBomListCopies").value, 10);
+  const hint = document.getElementById("wdBomListHint");
+  if (!listId) { hint.textContent = "请先选择 BOM 清单"; return; }
+  if (!Number.isInteger(copies) || copies < 1) { hint.textContent = "份数必须是大于等于 1 的整数"; return; }
+  hint.textContent = "读取清单并检查实时库存…";
+  const res = await api(`/api/bom-lists/${encodeURIComponent(listId)}/prepare`, {
+    method: "POST", body: JSON.stringify({ copies }),
+  });
+  if (!res.ok) { hint.textContent = `❌ ${res.error}`; return; }
+  renderWdMatch(res.results);
+  document.getElementById("wdMatchResult").style.display = "";
+  document.getElementById("wdMatchStatus").textContent = `✅ 已调用「${res.name}」，按 ${copies} 份核验实时库存`;
+}
+
 async function bmMatchItems(items, droppedNc, usage) {
   const statusEl = document.getElementById("bmStatus");
   if (!items.length) { statusEl.textContent = "没有解析出元件"; return; }
@@ -682,6 +1108,7 @@ async function bmMatchItems(items, droppedNc, usage) {
 }
 
 function renderBmMatch(results, droppedNc, usage) {
+  bmLastResults = results;
   const bBody = document.getElementById("bmBody");
   const nBody = document.getElementById("bmNeedBuyBody");
   bBody.innerHTML = "";
@@ -717,15 +1144,16 @@ function renderBmMatch(results, droppedNc, usage) {
     if (!r.candidates.length) {
       candHtml = `<span style="color:#dc2626">无匹配库存</span>`;
     } else {
-      r.candidates.forEach((c) => {
+      r.candidates.forEach((c, ci) => {
         const isExact = c.match_type === "exact";
         const warn = isExact ? "" : ` <span class="wdm-warn">⚠️ ${escHtml(c.pkg_note || "封装不同")}</span>`;
-        candHtml += `<div class="bm-cand">
+        candHtml += `<label class="bm-cand">
+          <input type="radio" name="bmc${results.indexOf(r)}" value="${escHtml(c.subcat)}|||${c.row}"${ci === 0 ? " checked" : ""}>
           <span class="bm-tag ${isExact ? "bm-tag-exact" : "bm-tag-sim"}">${isExact ? "精确" : "相似"}</span>
           <span>${escHtml(c.name)} | ${escHtml(c.brand || "—")} | ${escHtml(c.spec || "—")}</span>
           <span class="bm-stock">库存 ${escHtml(c.qty)}</span>
           <span class="bm-subcat">${escHtml(c.subcat)}</span>${warn}
-        </div>`;
+        </label>`;
       });
     }
     tr.innerHTML = `
@@ -764,6 +1192,7 @@ async function wdConfirm() {
   const statusEl = document.getElementById("wdMatchStatus");
   const groups = {};   // subcat -> [{row, qty}]
   document.querySelectorAll("#wdMatchTable input[type=radio]:checked").forEach((radio) => {
+    if (radio.disabled) return;
     const [subcat, row] = radio.value.split("|||");
     const label = radio.closest("label");
     const qtyInput = label ? label.querySelector(".wdm-qty") : null;
@@ -776,22 +1205,18 @@ async function wdConfirm() {
   const lines = Object.values(groups).reduce((s, a) => s + a.length, 0);
   if (!lines) { statusEl.textContent = "请为要取出的元件选择库存并填写数量"; return; }
   if (!confirm(`将取出 ${lines} 种元件的指定数量，确定继续？`)) return;
+  if (!await ensureGitBeforeWrite()) { statusEl.textContent = "远端未同步，已取消取出"; return; }
   statusEl.textContent = "取出中…";
-  let taken = 0, errs = [];
-  for (const [subcat, items] of Object.entries(groups)) {
-    const res = await api("/api/withdraw", {
-      method: "POST", body: JSON.stringify({ name: subcat, items }),
-    });
-    if (res.ok) taken += res.taken;
-    else errs.push(`「${subcat}」${res.error}`);
+  const res = await api("/api/withdraw/batch", {
+    method: "POST", body: JSON.stringify({ groups }),
+  });
+  if (!res.ok) {
+    statusEl.textContent = `❌ ${res.error}`;
+    return;
   }
-  if (errs.length) {
-    statusEl.textContent = `✅ 取出 ${taken} 件；部分失败：${errs.join("；")}`;
-  } else {
-    statusEl.textContent = `✅ 已取出 ${taken} 件，库存已更新`;
-    showToast(`已取出 ${taken} 件`);
-    document.getElementById("wdMatchResult").style.display = "none";
-  }
+  statusEl.textContent = `✅ 已取出 ${res.taken} 件（${res.lines} 种物料 / ${res.subcats} 个子分类），已记为一笔操作`;
+  showToast(`已取出 ${res.taken} 件`);
+  document.getElementById("wdMatchResult").style.display = "none";
   loadLowStockBadge();
 }
 
@@ -978,6 +1403,7 @@ async function saveCategory() {
     currentFields.forEach((f) => (copy[f.key] = it[f.key] ?? ""));
     return copy;
   });
+  if (!await ensureGitBeforeWrite()) return;
   const res = await api("/api/save", {
     method: "POST",
     body: JSON.stringify({ name: currentSubcat, items: clean }),
@@ -1035,6 +1461,7 @@ async function doStockAction() {
   statusEl.textContent = "处理中…";
   const items = selectedTableRows().map((row) => ({ row, qty }));
   if (!items.length) { statusEl.textContent = "请勾选要操作的元件行"; return; }
+  if (!await ensureGitBeforeWrite()) { statusEl.textContent = "远端未同步，已取消操作"; return; }
   const url = stockMode === "add" ? "/api/addstock" : "/api/withdraw";
   const res = await api(url, {
     method: "POST", body: JSON.stringify({ name: currentSubcat, items }),
@@ -1090,6 +1517,7 @@ function renderUndoList(items) {
 async function undoAction(time) {
   const statusEl = document.getElementById("undoStatus");
   if (!confirm("将恢复到该操作前的数据（该操作及其撤销记录将被移除）。\n确定撤回？")) return;
+  if (!await ensureGitBeforeWrite()) { statusEl.textContent = "远端未同步，已取消撤回"; return; }
   const res = await api("/api/undo", {
     method: "POST", body: JSON.stringify({ time }),
   });
@@ -1121,6 +1549,7 @@ async function mergeSubcat() {
     return;
   }
   if (!confirm(`将合并「${currentSubcat}」中 名称/品牌/封装/规格 完全相同的重复行，数量自动累加。\n确定继续？`)) return;
+  if (!await ensureGitBeforeWrite()) return;
   const res = await api("/api/subcat/merge", {
     method: "POST", body: JSON.stringify({ name: currentSubcat }),
   });
@@ -1203,6 +1632,7 @@ async function renderInput() {
   });
   catSelect.onchange = loadInputSubcats;
   await loadInputSubcats();
+  initOcrWorkers();
   document.getElementById("inputStatus").textContent = "";
 }
 
@@ -1265,30 +1695,28 @@ let ocrItems = [];
 async function ocrUpload() {
   const files = [...document.getElementById("ocrFile").files];
   const statusEl = document.getElementById("ocrStatus");
+  const workersEl = document.getElementById("ocrWorkers");
   if (!files.length) return;
-  statusEl.textContent = `识别中… 0/${files.length}（首次加载模型约几秒）`;
+  const workers = workersEl ? parseInt(workersEl.value, 10) || 0 : 0;
+  localStorage.setItem("ocrWorkers", String(workers));
+  const workerLabel = workers ? `${workers}线程` : "自动线程";
+  statusEl.textContent = `识别中… 共 ${files.length} 张（${workerLabel}，首次加载模型约几秒）`;
 
-  // 逐张 OCR, 按图片分组保存文本行
-  let imageGroups = [];   // [[行,...], [行,...], ...] 每张图一组
-  for (let i = 0; i < files.length; i++) {
-    statusEl.textContent = `识别中… ${i + 1}/${files.length}`;
-    const form = new FormData();
-    form.append("file", files[i]);
-    try {
-      const res = await fetch("/api/ocr", { method: "POST", body: form });
-      const data = await res.json();
-      if (data.ok && data.lines) {
-        imageGroups.push(data.lines);
-      } else {
-        imageGroups.push([]);
-        statusEl.textContent = `第 ${i + 1} 张失败: ${data.error || "未知错误"}`;
-      }
-    } catch (e) {
-      imageGroups.push([]);
-      statusEl.textContent = `第 ${i + 1} 张失败: ${e.message}`;
-    }
+  // 一次提交整批图片, 避免多张图片逐张 HTTP 往返。
+  const form = new FormData();
+  files.forEach((file) => form.append("files", file));
+  form.append("workers", String(workers));
+  let data;
+  try {
+    const res = await fetch("/api/ocr/batch", { method: "POST", body: form });
+    data = await res.json();
+    if (!data.ok) throw new Error(data.error || "OCR 失败");
+  } catch (e) {
+    statusEl.textContent = `❌ 图片识别失败: ${e.message}`;
+    return;
   }
 
+  const imageGroups = data.groups || [];
   const allLines = imageGroups.flat();
   if (!allLines.length) { statusEl.textContent = "❌ 没有识别出文字"; return; }
   // 带图片边界标记, 防止整理时把一张图的内容拆成多份
@@ -1296,21 +1724,18 @@ async function ocrUpload() {
     .map((g, i) => (g.length ? `【图${i + 1}】\n${g.join("\n")}` : `【图${i + 1}】(无文字)`))
     .join("\n");
   document.getElementById("ocrText").value = allLines.join("\n");
-  statusEl.textContent = `✅ 共识别 ${allLines.length} 行（${files.length} 张图），正在按模板整理…`;
+  const actualWorkers = data.workers || workers;
+  statusEl.textContent = `✅ ${actualWorkers}线程识别 ${allLines.length} 行（${files.length} 张图），正在整理…`;
 
-  // 按料袋模板自动整理 (数量 型号 品牌 封装 电气参数 器件名称)
-  try {
-    const fmt = await api("/api/ocr/format", {
-      method: "POST", body: JSON.stringify({ text: rawText }),
-    });
-    if (fmt.ok && fmt.text) {
-      document.getElementById("ocrText").value = fmt.text;
-      statusEl.textContent = `✅ 识别 ${files.length} 张图并已按模板整理，检查后点「AI 解析」`;
-    } else {
-      statusEl.textContent = `✅ 识别完成（自动整理失败：${fmt.error || "未知"}，可手动编辑）`;
-    }
-  } catch (e) {
-    statusEl.textContent = "✅ 识别完成（整理失败，可手动编辑后解析）";
+  await ocrParseText(rawText, `✅ ${actualWorkers}线程识别 ${files.length} 张图，正在结构化解析…`);
+}
+
+function initOcrWorkers() {
+  const select = document.getElementById("ocrWorkers");
+  if (!select) return;
+  const saved = localStorage.getItem("ocrWorkers");
+  if (["0", "1", "2", "4", "6", "8"].includes(saved)) {
+    select.value = saved;
   }
 }
 
@@ -1368,20 +1793,7 @@ async function cameraCapture() {
       .map((g, i) => (g.length ? `【图${i + 1}】\n${g.join("\n")}` : `【图${i + 1}】(无文字)`))
       .join("\n");
     document.getElementById("ocrText").value = allLines.join("\n");
-    statusEl.textContent = `✅ 拍摄 ${res.n} 张，识别 ${allLines.length} 行，正在按模板整理…`;
-    try {
-      const fmt = await api("/api/ocr/format", {
-        method: "POST", body: JSON.stringify({ text: rawText }),
-      });
-      if (fmt.ok && fmt.text) {
-        document.getElementById("ocrText").value = fmt.text;
-        statusEl.textContent = `✅ 拍摄 ${res.n} 张并已按模板整理，检查后点「AI 解析」${warn}`;
-      } else {
-        statusEl.textContent = `✅ 识别完成（自动整理失败：${fmt.error || "未知"}，可手动编辑）`;
-      }
-    } catch (e) {
-      statusEl.textContent = "✅ 识别完成（整理失败，可手动编辑后解析）";
-    }
+    await ocrParseText(rawText, `✅ 拍摄 ${res.n} 张，识别 ${allLines.length} 行，正在结构化解析…${warn}`);
   } catch (e) {
     statusEl.textContent = `❌ 摄像头失败: ${e.message}`;
   }
@@ -1391,8 +1803,14 @@ async function ocrParse() {
   const text = document.getElementById("ocrText").value.trim();
   const statusEl = document.getElementById("ocrStatus");
   if (!text) { statusEl.textContent = "请先上传图片识别文字（或手动输入）"; return; }
-  statusEl.textContent = "AI 解析中…";
-  const res = await api("/api/import_parse_text", {
+  await ocrParseText(text, "AI 解析中…");
+}
+
+async function ocrParseText(text, progressText) {
+  const statusEl = document.getElementById("ocrStatus");
+  document.getElementById("ocrText").value = text;
+  statusEl.textContent = progressText || "AI 解析中…";
+  const res = await api("/api/ocr/parse_text", {
     method: "POST", body: JSON.stringify({ text }),
   });
   if (!res.ok) { statusEl.textContent = `❌ ${res.error}`; return; }
@@ -1401,24 +1819,42 @@ async function ocrParse() {
   document.getElementById("ocrResultCount").textContent = `${ocrItems.length} 条`;
   renderOcrResult();
   const ncNote = res.dropped_nc ? `（已剔除 ${res.dropped_nc} 条 NC/不贴装）` : "";
-  statusEl.textContent = `✅ 解析完成 ${ocrItems.length} 条${ncNote}，请核对后确认写入`;
+  const tkNote = fmtUsage(res.usage);
+  statusEl.textContent = `✅ 解析完成 ${ocrItems.length} 条${ncNote}${tkNote}，请核对后确认写入`;
 }
 
 function renderOcrResult() {
   const body = document.getElementById("ocrResultBody");
   body.innerHTML = "";
+  const editableFields = ["name", "brand", "package", "qty", "spec"];
   ocrItems.forEach((it, i) => {
     const tr = document.createElement("tr");
     if (!it.cat_key) tr.style.background = "#fef3c7";  // 未识别分类标黄
-    tr.innerHTML = `
-      <td><input type="checkbox" class="ocr-check" data-i="${i}" ${it._checked ? "checked" : ""} onchange="ocrItems[${i}]._checked=this.checked"></td>
-      <td>${escHtml(it.name)}</td>
-      <td>${escHtml(it.brand)}</td>
-      <td>${escHtml(it.package)}</td>
-      <td>${escHtml(it.qty)}</td>
-      <td>${escHtml(it.spec)}</td>
-      <td>${escHtml(it.cat_key || "⚠️ 未识别")}</td>
-      <td>${escHtml(it.subcat)}</td>`;
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.className = "ocr-check";
+    checkbox.checked = it._checked;
+    checkbox.onchange = () => { it._checked = checkbox.checked; };
+    const checkCell = document.createElement("td");
+    checkCell.appendChild(checkbox);
+    tr.appendChild(checkCell);
+
+    editableFields.forEach((field) => {
+      const cell = document.createElement("td");
+      cell.contentEditable = "true";
+      cell.textContent = it[field] || "";
+      cell.title = "点击修改";
+      cell.oninput = () => { it[field] = cell.textContent.trim(); };
+      tr.appendChild(cell);
+    });
+
+    const categoryCell = document.createElement("td");
+    categoryCell.textContent = it.cat_key || "⚠️ 未识别";
+    categoryCell.title = "分类可在写入后从未分类区调整";
+    const subcategoryCell = document.createElement("td");
+    subcategoryCell.textContent = it.subcat || "";
+    subcategoryCell.title = "分类可在写入后从未分类区调整";
+    tr.append(categoryCell, subcategoryCell);
     body.appendChild(tr);
   });
 }
@@ -1434,6 +1870,7 @@ async function ocrCommit() {
   const sel = ocrItems.filter((it) => it._checked);
   const statusEl = document.getElementById("ocrCommitStatus");
   if (!sel.length) { statusEl.textContent = "没有勾选任何条目"; return; }
+  if (!await ensureGitBeforeWrite()) { statusEl.textContent = "远端未同步，已取消写入"; return; }
   statusEl.textContent = "写入中…";
   const res = await api("/api/import_commit", {
     method: "POST", body: JSON.stringify({ items: sel }),
@@ -1561,6 +1998,7 @@ async function batchCommit() {
   const sel = batchItems.filter((it) => it._checked);
   const statusEl = document.getElementById("batchCommitStatus");
   if (!sel.length) { statusEl.textContent = "没有勾选任何条目"; return; }
+  if (!await ensureGitBeforeWrite()) { statusEl.textContent = "远端未同步，已取消写入"; return; }
   statusEl.textContent = "写入中…";
   const res = await api("/api/import_commit", {
     method: "POST", body: JSON.stringify({ items: sel }),
@@ -1818,6 +2256,31 @@ async function openAIConfig() {
   document.getElementById("decorHint2").textContent = !s.decor2
     ? "已隐藏" : (s.decor2.startsWith("static/") ? "使用默认内置图" : `当前: ${s.decor2}`);
 
+  // 线上同步 Tab
+  document.getElementById("syncProviderSel").value = s.sync_provider === "git" ? "git" : "gitee";
+  const prov = s.sync_provider === "git" ? "git" : "gitee";
+  const g = s[`${prov}_sync`] || {};
+  document.getElementById("gitCfgEnabled").checked = !!g.enabled;
+  document.getElementById("gitCfgUsername").value = g.username || "";
+  document.getElementById("gitCfgRemote").value = g.remote_url || "";
+  document.getElementById("gitCfgLocal").value = g.local_dir || "";
+  document.getElementById("gitCfgBranch").value = g.branch || "main";
+  document.getElementById("gitCfgEvents").value = g.events_dir || "events";
+  document.getElementById("gitCfgStatus").textContent = g.configured
+    ? `✅ 已填写 ${s.sync_provider === "gitee" ? "Gitee" : "GitHub"} 同步配置`
+    : `⚠️ 尚未配置当前平台`;
+
+  const ge = s.gitee_sync || {};
+  document.getElementById("giteeCfgEnabled").checked = !!ge.enabled;
+  document.getElementById("giteeCfgUsername").value = ge.username || "";
+  document.getElementById("giteeCfgRemote").value = ge.remote_url || "";
+  document.getElementById("giteeCfgLocal").value = ge.local_dir || "";
+  document.getElementById("giteeCfgBranch").value = ge.branch || "main";
+  document.getElementById("giteeCfgEvents").value = ge.events_dir || "events";
+  document.getElementById("giteeCfgStatus").textContent = ge.configured
+    ? "✅ 已填写 Gitee 同步配置"
+    : "⚠️ 尚未配置 Gitee 同步";
+
   // 数据管理 Tab (数据量统计)
   document.getElementById("setDataStatus").textContent = "";
   loadDataStat();
@@ -1832,7 +2295,7 @@ function closeAIConfig() {
 }
 
 function switchSetTab(tab) {
-  const map = { path: "setTabPath", ai: "setTabAI", ui: "setTabUI", data: "setTabData" };
+  const map = { path: "setTabPath", ai: "setTabAI", ui: "setTabUI", data: "setTabData", git: "setTabGit" };
   for (const [k, id] of Object.entries(map)) {
     document.getElementById(id).className = "tab2" + (k === tab ? " active" : "");
   }
@@ -1840,10 +2303,127 @@ function switchSetTab(tab) {
   document.getElementById("setPanelAI").style.display = tab === "ai" ? "" : "none";
   document.getElementById("setPanelUI").style.display = tab === "ui" ? "" : "none";
   document.getElementById("setPanelData").style.display = tab === "data" ? "" : "none";
+  document.getElementById("setPanelGit").style.display = tab === "git" ? "" : "none";
   if (tab === "data") loadDataStat();
 }
 
-// ── 数据包 导出/导入 ───────────────────
+// ── Git 增量同步实验 ───────────────────
+function gitConfigPayload() {
+  return {
+    sync_provider: "git",
+    git_sync: {
+      enabled: document.getElementById("gitCfgEnabled").checked,
+      username: document.getElementById("gitCfgUsername").value.trim(),
+      remote_url: document.getElementById("gitCfgRemote").value.trim(),
+      local_dir: document.getElementById("gitCfgLocal").value.trim(),
+      branch: document.getElementById("gitCfgBranch").value.trim() || "main",
+      events_dir: document.getElementById("gitCfgEvents").value.trim() || "events",
+    },
+  };
+}
+
+async function saveGitConfig() {
+  const status = document.getElementById("gitCfgStatus");
+  try {
+    const s = await api("/api/settings", {
+      method: "POST", body: JSON.stringify(gitConfigPayload()),
+    });
+    currentSettings = s;
+    const saved = s.git_sync || {};
+    status.textContent = saved.configured
+      ? "✅ GitHub 配置已保存，当前同步平台已切换为 GitHub"
+      : "⚠️ 已保存，但仓库地址或本地目录为空";
+    document.getElementById("syncProviderSel").value = "git";
+    showToast("GitHub 配置已保存并设为当前平台");
+  } catch (e) {
+    status.textContent = `❌ 保存失败: ${e.message}`;
+  }
+}
+
+function giteeConfigPayload() {
+  return {
+    sync_provider: "gitee",
+    gitee_sync: {
+      enabled: document.getElementById("giteeCfgEnabled").checked,
+      username: document.getElementById("giteeCfgUsername").value.trim(),
+      remote_url: document.getElementById("giteeCfgRemote").value.trim(),
+      local_dir: document.getElementById("giteeCfgLocal").value.trim(),
+      branch: document.getElementById("giteeCfgBranch").value.trim() || "main",
+      events_dir: document.getElementById("giteeCfgEvents").value.trim() || "events",
+    },
+  };
+}
+
+async function saveGiteeConfig() {
+  const status = document.getElementById("giteeCfgStatus");
+  try {
+    const s = await api("/api/settings", {
+      method: "POST", body: JSON.stringify(giteeConfigPayload()),
+    });
+    currentSettings = s;
+    const saved = s.gitee_sync || {};
+    status.textContent = saved.configured
+      ? "✅ Gitee 配置已保存，当前同步平台已切换为 Gitee"
+      : "⚠️ 已保存，但仓库地址或本地目录为空";
+    document.getElementById("syncProviderSel").value = "gitee";
+    showToast("Gitee 配置已保存并设为当前平台");
+  } catch (e) {
+    status.textContent = `❌ 保存失败: ${e.message}`;
+  }
+}
+
+async function saveSyncProvider() {
+  const v = document.getElementById("syncProviderSel").value;
+  try {
+    const s = await api("/api/settings", {
+      method: "POST", body: JSON.stringify({ sync_provider: v }),
+    });
+    currentSettings = s;
+    await openAIConfig();
+    switchSetTab("git");
+    showToast(`线上同步平台已切换为 ${v === "gitee" ? "Gitee" : "GitHub"}`);
+  } catch (e) {
+    showToast(`切换失败: ${e.message}`);
+  }
+}
+
+async function inspectGitConfig() {
+  const result = document.getElementById("gitCfgStatus");
+  result.textContent = "检查中…";
+  try {
+    const r = await api("/api/git-sync/inspect", { method: "POST" });
+    result.textContent = r.ok ? `✅ ${r.message}` : `❌ ${r.message}`;
+  } catch (e) {
+    result.textContent = `❌ 检查失败: ${e.message}`;
+  }
+}
+
+async function checkGitSync() {
+  const result = document.getElementById("gitCfgStatus");
+  result.textContent = "正在检测远端更新…首次检测可能需要克隆仓库。";
+  try {
+    const r = await api("/api/git-sync/check", { method: "POST" });
+    result.textContent = r.ok
+      ? `✅ ${r.message}${r.remote_commit ? `（${r.remote_commit.slice(0, 8)}）` : ""}`
+      : `❌ ${r.message}`;
+  } catch (e) {
+    result.textContent = `❌ 检测失败: ${e.message}`;
+  }
+}
+
+async function browseGitDir(targetId) {
+  try {
+    if (window.pywebview && window.pywebview.api && window.pywebview.api.choose_dir) {
+      const dir = await window.pywebview.api.choose_dir();
+      if (dir) document.getElementById(targetId || "gitCfgLocal").value = dir;
+    } else {
+      showToast("浏览器模式请手动输入本地同步目录");
+    }
+  } catch (e) {
+    showToast(`目录选择失败: ${e.message}`);
+  }
+}
+
 async function browsePkgDir() {
   try {
     if (window.pywebview && window.pywebview.api && window.pywebview.api.choose_dir) {
@@ -1887,6 +2467,7 @@ async function importPackage() {
     input.value = "";
     return;
   }
+  if (!await ensureGitBeforeWrite()) { statusEl.textContent = "远端未同步，已取消导入"; return; }
   statusEl.textContent = "导入中…（同名子分类自动合并）";
   const form = new FormData();
   form.append("file", f);
@@ -1935,6 +2516,7 @@ async function clearData(scope) {
   } else {
     if (!confirm(`确定${labels[scope]}？`)) return;
   }
+  if (scope !== "activity" && !await ensureGitBeforeWrite()) { statusEl.textContent = "远端未同步，已取消清理"; return; }
   const res = await api("/api/data/clear", {
     method: "POST", body: JSON.stringify({ scope }),
   });
@@ -1989,6 +2571,7 @@ async function deleteSubcats() {
   const names = [...document.querySelectorAll("#delSubcatList input:checked")].map((c) => c.value);
   if (!names.length) { statusEl.textContent = "请勾选要删除的子分类"; return; }
   if (!confirm(`将删除 ${names.length} 个子分类的全部元件数据，此操作不可恢复。\n确定继续？`)) return;
+  if (!await ensureGitBeforeWrite()) { statusEl.textContent = "远端未同步，已取消删除"; return; }
   const res = await api("/api/subcat/delete", {
     method: "POST", body: JSON.stringify({ names }),
   });
