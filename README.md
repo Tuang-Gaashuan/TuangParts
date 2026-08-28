@@ -11,10 +11,11 @@
 
 | 版本 | 源码 | 说明 |
 | --- | --- | --- |
-| **4.0.0（最新）** | [parts-warehouse-src-4.0.0/](parts-warehouse-src-4.0.0/) | Codex 风格工作区 + 全库搜索 + 数据包导入分类修复 |
+| **4.0.1（最新）** | [parts-warehouse-src-4.0.0/](parts-warehouse-src-4.0.0/) | Codex 风格工作区 + 全库搜索 + 数据包导入分类修复 + **0 数量元器件修复** |
+| 4.0.0 | 同 4.0.1 源码目录 | Codex 风格工作区 + 全库搜索 + 数据包导入分类修复 |
 | 3.0.0 | [parts-warehouse-src/](parts-warehouse-src/) | 品牌库 + 数据清洗 + 账本体系（历史版本） |
 
-> 发布版 exe / zip 走 GitHub Releases（带版本号），不入仓库。
+> 4.0.1 为 4.0.0 的修复版：v4.0.0 上传后立即发现「0 数量元器件」数据 bug 并修复（列错位导致的历史脏数据清理 + 全路径数量防线）。发布版 exe / zip 走 GitHub Releases（带版本号），不入仓库。
 
 ## 📖 使用说明书（4.0.0 完整版）
 

@@ -1403,6 +1403,21 @@ async function saveCategory() {
     currentFields.forEach((f) => (copy[f.key] = it[f.key] ?? ""));
     return copy;
   });
+  // 数量红线: 不允许 0/空/非数字 数量落库 (库存中不存在 0 数量元器件)
+  const qtyField = currentFields.find((f) => f.key === "qty");
+  if (qtyField) {
+    const bad = clean.filter((it) => {
+      const q = String(it.qty ?? "").trim();
+      if (q === "") return false; // 空行(未填写)允许, 保存时后端会过滤空行
+      const n = Number(q);
+      return !Number.isFinite(n) || n <= 0;
+    });
+    if (bad.length) {
+      const names = bad.map((it) => it.name || "(未命名)").slice(0, 5).join("、");
+      showToast(`❌ 数量必须大于 0：「${names}」${bad.length > 5 ? ` 等 ${bad.length} 行` : ""}`, 5000);
+      return;
+    }
+  }
   if (!await ensureGitBeforeWrite()) return;
   const res = await api("/api/save", {
     method: "POST",

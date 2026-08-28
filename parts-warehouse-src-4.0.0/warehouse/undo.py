@@ -128,29 +128,49 @@ def apply_operation(data_dir: str, undo_id: str, details: list, mode: str = "und
         else:
             headers, current = store.load(subcat)
         for row_index, detail in entries:
-            if not 0 <= row_index < len(current):
-                continue
             snap = _snapshot_row(data_dir, undo_id, subcat, row_index)
             if snap is None:
                 continue
-            snap_name = str((snap.get("fields") or [""])[0] or "").strip()
-            current_name = str((current[row_index] or [""])[0] or "").strip()
-            if snap_name and current_name != snap_name:
+            snap_fields = snap.get("fields") or [""] * len(COMMON_FIELDS)
+            snap_name = str((snap_fields or [""])[0] or "").strip()
+            # 定位当前行: 优先按原行号; 行被删(取出归零/合并)时按名称匹配重建。
+            target = None
+            if 0 <= row_index < len(current):
+                current_name = str((current[row_index] or [""])[0] or "").strip()
+                if not snap_name or current_name == snap_name:
+                    target = row_index
+            if target is None:
+                # 行号错位或行已删除: 按快照名称在当前行中查找
+                for i, cand in enumerate(current):
+                    cand_name = str((cand or [""])[0] or "").strip()
+                    if cand_name == snap_name:
+                        target = i
+                        break
+            if target is None and mode == "undo":
+                # 行已被删除 (如取完最后一件后 0 数量行不落盘): 用快照重建。
+                # 快照 fields 含操作前数量, 重建后由下方 new_qty 统一重算, 先置空。
+                rebuilt = list(snap_fields)
+                while len(rebuilt) <= 3:
+                    rebuilt.append("")
+                rebuilt[3] = "0"
+                current.append(rebuilt)
+                target = len(current) - 1
+            if target is None:
                 continue
             amount = abs(int(detail.get("delta", 0) or 0))
             if not amount:
                 continue
-            old_qty = int(float(str(current[row_index][3]).strip() or 0)) if len(current[row_index]) > 3 else 0
+            old_qty = int(float(str(current[target][3]).strip() or 0)) if len(current[target]) > 3 else 0
             direction = 1 if int(detail.get("delta", 0) or 0) < 0 else -1
             if mode == "restore":
                 direction *= -1
             new_qty = old_qty + direction * amount
             if new_qty < 0:
                 raise ValueError(f"「{detail.get('name', '')}」库存不足，无法取消撤回")
-            current[row_index][3] = str(new_qty)
+            current[target][3] = str(new_qty)
             label = "已撤回" if mode == "undo" else "取消撤回"
-            _append_note(current[row_index], f"{label} {amount} 件")
-            changed.append({"subcat": subcat, "row": row_index, "detail_index": detail.get("detail_index"), "name": detail.get("name", ""),
+            _append_note(current[target], f"{label} {amount} 件")
+            changed.append({"subcat": subcat, "row": target, "detail_index": detail.get("detail_index"), "name": detail.get("name", ""),
                             "delta": direction * amount, "quantity_before": old_qty,
                             "quantity_after": new_qty, "status": label})
         if subcat == UNCAT_KEY:

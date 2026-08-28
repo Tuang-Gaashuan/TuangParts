@@ -19,6 +19,41 @@ from warehouse.config import CATEGORIES, fields_for, safe_filename, primary_owne
 _STATS_CACHE = {}
 
 
+def sanitize_qty(value) -> str:
+    """数量清洗: 必须是正数, 0/空/非法 → 返回 "0"(由调用方决定剔除或补数)。
+
+    库存红线: 元器件数量不允许为 0/负数/非数字。历史脏数据或错位导入
+    可能把数量写成 0 或把别列数值挤进数量列, 统一在这里兜底。
+    """
+    text = str(value or "").strip()
+    if not text:
+        return "0"
+    try:
+        n = float(text)
+    except (TypeError, ValueError):
+        return "0"
+    if n <= 0 or n != n:  # <=0 或 NaN
+        return "0"
+    return str(int(n)) if n.is_integer() else str(n)
+
+
+def clean_rows(rows: list) -> list:
+    """过滤数量 <= 0 的行 (历史 0 数量条目不允许再落盘)。
+
+    返回新列表, 不修改入参。数量非法但名称/品牌有内容的行,
+    由调用方决定是否按快照补数; 这里只保证写盘数据不含 0 数量。
+    """
+    out = []
+    for r in rows:
+        padded = list(r) + [""] * 9
+        q = sanitize_qty(padded[3])
+        if q == "0":
+            continue
+        padded[3] = q
+        out.append(padded[:9])
+    return out
+
+
 class ExcelStore:
     """子分类 -> Excel 文件的读写层。"""
 
@@ -56,7 +91,12 @@ class ExcelStore:
 
     # ── 写 (有数据才建文件) ─────────────────────────────
     def save(self, subcat: str, headers: list, rows: list) -> str:
-        """保存子分类数据。rows 为空时删除文件 (空分类不显示)。返回文件路径。"""
+        """保存子分类数据。rows 为空时删除文件 (空分类不显示)。返回文件路径。
+
+        库存红线: 数量 <= 0 / 空 / 非数字 的行不允许写盘 (clean_rows 过滤),
+        防止历史错位导入或误操作把 0 数量条目存进库存。
+        """
+        rows = clean_rows(rows)
         path = self.subcat_path(subcat)
         if not rows:
             # 空数据: 删除文件, 分类自动从界面消失
