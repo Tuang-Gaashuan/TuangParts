@@ -17,6 +17,7 @@
 
 import os
 import uuid
+import zipfile
 from urllib.parse import urlparse
 import threading
 import webbrowser
@@ -1786,8 +1787,12 @@ def data_import():
     try:
         r = import_package(get_data_dir(), f.read(), project_root=BASE_DIR)
         return jsonify(r)
+    except zipfile.BadZipFile:
+        return jsonify({"error": "导入失败：文件不是有效的 ZIP 数据包，可能已损坏或扩展名不正确。请重新导出数据包后再导入。"}), 400
+    except ValueError as e:
+        return jsonify({"error": f"导入失败：{str(e)[:300]}"}), 400
     except Exception as e:
-        return jsonify({"error": f"导入失败: {str(e)[:200]}"}), 500
+        return jsonify({"error": f"导入失败：{str(e)[:200]}"}), 500
 
 
 # ── API: 批量导入 ──────────────────────────────────────

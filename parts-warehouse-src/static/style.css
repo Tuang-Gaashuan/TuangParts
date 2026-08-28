@@ -488,6 +488,38 @@ main { max-width: 1100px; margin: 0 auto; padding: 26px 24px 60px; }
 #entryBomMatch { border-top: 4px solid #7c3aed; }
 #entryBomManage { border-top: 4px solid #db2777; }
 #entryBrand { border-top: 4px solid #0d9488; }
+#entryLedger {
+  border-top: 4px solid #dc2626;
+  background: linear-gradient(145deg, #fff7f7, var(--card-bg));
+}
+#entryLedger:hover { border-color: #dc2626; box-shadow: 0 10px 28px rgba(220, 38, 38, .18); }
+#entryGitSync {
+  border-top: 4px solid #0891b2;
+  background: linear-gradient(145deg, #f0faff, var(--card-bg));
+}
+#entryGitSync:hover { border-color: #0891b2; box-shadow: 0 10px 28px rgba(8, 145, 178, .18); }
+
+/* ── 出入账本：红色审计语义 ─────────── */
+.ledger-page > .detail-head {
+  border-left: 5px solid #dc2626;
+  padding-left: 12px;
+}
+.ledger-page .ledger-tools { border-top: 3px solid #dc2626; }
+.ledger-page .ledger-table th { background: #fff1f2; color: #9f1239; }
+
+/* ── 线上同步：青蓝网络语义 ─────────── */
+.git-sync-page > .detail-head {
+  border-left: 5px solid #0891b2;
+  padding-left: 12px;
+}
+.git-sync-page .git-sync-panel { border-top: 3px solid #0891b2; }
+.git-sync-page .git-sync-read-panel { border-top-color: #0284c7; }
+.git-sync-page .panel-title { background: linear-gradient(135deg, #0e7490, #0284c7); }
+
+body[data-theme="dark"] #entryLedger { background: linear-gradient(145deg, #3f151b, var(--card-bg)); }
+body[data-theme="dark"] #entryGitSync { background: linear-gradient(145deg, #10313c, var(--card-bg)); }
+body[data-theme="dark"] .ledger-page .ledger-table th { background: #4c1522; color: #fecdd3; }
+body[data-theme="dark"] .git-sync-page .panel-title { background: linear-gradient(135deg, #155e75, #0369a1); }
 
 /* ── BOM 清单管理 ───────────────────── */
 .bom-manage-page > .detail-head,

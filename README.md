@@ -1,114 +1,54 @@
 # 元器件仓库 (Parts Warehouse)
 
-本地元器件库存管理工具 —— 数据就是 Excel，所见即所得，AI 帮你录入，BOM 一键匹配取出。
+本地元器件库存管理工具。库存数据保存为 Excel，支持 AI 辅助录入、BOM 匹配取出、出入账本审计、撤回和 Git 事件同步。
 
 [![Release](https://img.shields.io/github/v/release/Tuang-Gaashuan/parts-warehouse)](https://github.com/Tuang-Gaashuan/parts-warehouse/releases/latest)
 [![License](https://img.shields.io/github/license/Tuang-Gaashuan/parts-warehouse)](LICENSE)
 
-> ⬇️ **下载安装包**：[https://github.com/Tuang-Gaashuan/parts-warehouse/releases/latest](https://github.com/Tuang-Gaashuan/parts-warehouse/releases/latest)
-> （单文件版 exe 303MB / 完整版 zip 310MB，均为 Windows 双击即用）
+下载地址将在发布后更新到 GitHub Releases 页面。
 
-- **数据就是 Excel**：每个一级分类一个 `.xlsx`，无数据库，用 WPS/Excel 直接打开
-- **AI 加持但非必须**：一句话描述自动入库、BOM 批量解析；纯规则解析离线也能干
-- **36 个一级分类 / 585 个子分类**：参考立创商城商品分类，覆盖常见电子元器件
-- **桌面 + 浏览器双形态**：pywebview 原生窗口或纯 Web 页面
+## 功能
 
-## 界面预览
+- Excel 库存：每个一级分类一个 `.xlsx`，可直接用 WPS 或 Excel 查看。
+- AI 填入：在线 OpenAI 兼容 API 或离线模型均可选配；不配置 AI 也可使用手动录入和规则导入。
+- 批量导入：支持 `.xls`、`.xlsx` 与文本，自动定位采购或 BOM 表头。
+- BOM 清单：严格匹配仓库具体型号，显示精确、相似、不足与缺料状态，确认后按生产份数取出。
+- 出入账本：一次业务操作对应一条主记录，保留明细和审计历史。
+- 撤回：支持整笔、明细和批量撤回，以及取消撤回。
+- 线上同步：在 GitHub/Git 或 Gitee 间提交、读取账本事件，并按事件 ID 防止重复读取。
+- 数据包：可导出和导入数据，便于迁移和备份。
+- OCR：使用 RapidOCR 离线识别图片或摄像头内容。
 
-大厅 —— 分类卡片总览，只显示有记录的分类：
+## v3.0.0
 
-![大厅](docs/images/main.png)
+- 账本采用单一主记录与撤回快照，跨分类 BOM 取出保持为一个业务事务。
+- 同步配置严格检查平台和远端地址，读取与提交操作分离，远端事件幂等入账。
+- 首页和页面内为“出入账本”提供红色审计语义，为“线上同步”提供青蓝网络语义，并适配深色主题。
 
-分类界面 —— 表格直接编辑、按数值排序、搜索过滤：
+完整更新说明见 `RELEASE_NOTES_v3.0.0.md`。
 
-![分类界面](docs/images/sort.png)
+## 发布包
 
-录入 —— 批量导入（Excel / TXT）与摄像头拍照入库：
+| 形态 | 文件 | 内容 |
+| --- | --- | --- |
+| 单文件版 | `parts-warehouse.exe` | 一个可执行文件。首次运行会生成干净 `data\` 目录，不含个人库存、API Key、远端地址或本机路径。 |
+| 完整目录版 | `parts-warehouse-full.zip` | 解压即用的目录运行环境，启动更快；同样只包含干净种子数据。 |
+| 源码 | `parts-warehouse-src/` | 源码、测试、打包配置和文档；不包含二进制、构建缓存、用户数据或凭据。 |
 
-<p align="center">
-  <img src="docs/images/excel&amp;txt.png" width="49%" alt="Excel/TXT 批量导入">
-  <img src="docs/images/camera.png" width="49%" alt="摄像头拍照入库">
-</p>
+两种 EXE 的功能相同，均不需要安装 Python。数据始终保存在运行目录旁的 `data\`，复制该目录即可备份。
 
-设置 —— 主题色系、背景图、AI 接口、数据路径：
-
-<p align="center">
-  <img src="docs/images/setting1.png" width="24%" alt="设置 1">
-  <img src="docs/images/setting2.png" width="24%" alt="设置 2">
-  <img src="docs/images/setting3.png" width="24%" alt="设置 3">
-  <img src="docs/images/setting4.png" width="24%" alt="设置 4">
-</p>
-
-## 发布包内容
-
-本仓库提供三种使用形态，按需选择：
-
-| 形态 | 文件 | 体积 | 适合 |
-| --- | --- | --- | --- |
-| 单文件版 | `parts-warehouse.exe` | 约 303MiB | 想一个文件拿走就用，双击即开（首次运行稍慢，需解压） |
-| 完整版 | `parts-warehouse-full.zip` | 约 330MiB | 解压后运行，启动快，适合固定电脑长期用；包含目录版依赖与当前数据 |
-| 源码 | `parts-warehouse-src/` | 8MB | 开发者：看实现、改代码、自己打包 |
-
-两种 exe 功能完全一样（单文件版 = 完整版的压缩形态），都不需要安装 Python。
-
-## 快速开始
-
-1. 下载 `parts-warehouse.exe`（或解压完整版）到任意目录
-2. 双击运行 —— 首次启动自动在 exe 旁边生成 `data\` 目录（含示例数据）
-3. 开始录入：手动填表 / `✦ AI 填入` 一句话入库 / 拍照 OCR 入库 / BOM 批量导入
-
-数据永远在 `data\` 目录，重装、升级都不丢；复制 `data\` 即备份。
-
-## 功能一览
-
-| 功能 | 说明 |
-| --- | --- |
-| 库存总览 | 分类卡片总览，只显示有记录的分类 |
-| AI 填入 | 「100个 0805 10K ±1% 贴片电阻」→ 自动解析成结构化数据 |
-| 批量导入 | 粘贴文本 / 上传 `.xls`、`.xlsx`，自动识别表头；结构清晰的 BOM/采购表走本地规则快速解析，字段模糊时才回退 AI |
-| BOM 匹配取出 | 导入 BOM 自动匹配库存，精确/相似/不足/缺料四色状态，按需扣减 |
-| 未分类区 | 无法判断归属的元件自动进未分类区，手动归类 |
-| OCR 拍照入库 | 摄像头拍照 / 图片识别（RapidOCR 离线），AI 整理后一键入库 |
-| 数据包 | ZIP 一键导出/导入全部数据，换机迁移、备份 |
-| 品牌库 | 按品牌聚合采购记录（品牌 / 业务 / 采购量），同品牌多写法自动合并，可导出 Excel、生成品牌库档案 |
-| 撤销 | 导入、取出、修改均可一键撤回 |
-| 低库存预警 | 数量低于阈值（默认 10）的元件清单 |
-
-
-## 2026-08 更新：Excel 导入兼容与加速
-
-- 支持旧版 `.xls` 与 `.xlsx`；格式不匹配或文件损坏会给出明确提示。
-- 自动在前 20 行中定位采购/BOM 表头，不依赖固定行号。
-- 对型号、数量、品牌、封装等字段清晰的表格优先本地解析：无需 API Key、不消耗 AI Token，导入更快。
-- 电容、电阻、电感以数值（如 `10uF`、`10kΩ`、`10uH`）作为名称，具体料号保留在规格字段，便于检索与严格 BOM 匹配。
-
-## AI 功能（可选）
-
-- **在线 API**：DeepSeek、智谱 GLM 等任意 OpenAI 兼容接口，填 base_url / API Key / model 即可
-- **本地离线（Ollama）**：免费离线，数据不出本机（`ollama pull qwen2.5:7b`）
-
-不配 AI 也能用：手动录入、纯规则批量导入、拍照入库的 `--no-ai` 模式都不依赖 AI。
-
-## 开发者
-
-源码在 `parts-warehouse-src/`（独立 git 仓库），README、目录结构、打包方法见其中：
+## 开发
 
 ```bash
-git clone <本仓库>
+git clone <仓库地址>
 cd parts-warehouse-src
 pip install -r requirements.txt
-python seed.py      # 可选：生成示例数据
-python desktop.py   # 桌面版
-python app.py       # 浏览器版 http://127.0.0.1:5000
+python desktop.py
 ```
 
-打包：`python pack.py`（自动备份数据 → 打包 → 更新 dist/），详见 src 内 README。
+浏览器模式：`python app.py`，默认地址为 `http://127.0.0.1:5000`。
 
-## 数据安全
-
-- 所有数据 = `data\` 目录下的 xlsx，复制即备份
-- 打包/导入数据包前自动备份到 `backups\`
-- 本发布包**不含任何用户数据**，首次运行自动生成干净数据目录
+目录版打包：`python pack.py`。单文件版：`python -m PyInstaller parts_warehouse_onefile.spec --noconfirm`。
 
 ## License
 

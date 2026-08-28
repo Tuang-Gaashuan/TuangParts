@@ -58,8 +58,6 @@ def export_package(data_dir: str, out_dir: str = "") -> dict:
     """
     from warehouse import unclassified
     export_dir = out_dir.strip() or os.path.join(data_dir, EXPORT_SUBDIR)
-    if not os.path.isdir(export_dir):
-        raise ValueError(f"导出目录不存在: {export_dir}")
     os.makedirs(export_dir, exist_ok=True)
     ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = f"parts-warehouse_导出_{ts}.zip"
