@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# rk — 元器件拍照/图片一键入库
+# 用法:
+#   rk                     # 摄像头拍照入库 (空格=拍照 回车=结束)
+#   rk a.jpg b.jpg         # 指定图片
+#   rk -d 目录             # 目录内全部图片
+#   rk --no-ai             # 纯规则解析, 无需 AI/key/网络 (适合固定格式料袋)
+#   rk -y                  # 跳过确认
+set -e
+PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$PROJECT_DIR"
+exec python rk.py "$@"
