@@ -57,7 +57,7 @@
 
 ### 方式一：直接下载打包版（推荐）
 
-从 [Releases](https://github.com/Tuang-Gaashuan/parts-warehouse/releases) 下载 `parts-warehouse-4.0.0-windows.zip`（目录版 + 单文件版）或 `parts-warehouse.exe`，双击即用：
+从 [Releases](https://github.com/Tuang-Gaashuan/TuangParts/releases) 下载 `parts-warehouse-4.0.1-windows.zip`（目录版 + 单文件版）或 `parts-warehouse-4.0.1.exe`，双击即用：
 
 - 首次运行会在 exe 旁边自动生成 `data\` 目录（含示例数据）
 - 数据永远在 `data\` 目录，重装、重打包都不丢数据
@@ -68,7 +68,7 @@
 需要 Python 3.10+：
 
 ```bash
-git clone https://github.com/Tuang-Gaashuan/parts-warehouse.git
+git clone https://github.com/Tuang-Gaashuan/TuangParts.git
 cd parts-warehouse/parts-warehouse-src-4.0.0
 pip install -r requirements.txt
 python seed.py      # 可选：生成示例数据（会清空 data/，正式使用后勿跑）
