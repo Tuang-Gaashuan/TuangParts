@@ -22,6 +22,7 @@ from urllib.parse import urlparse
 import threading
 import webbrowser
 import faulthandler
+import urllib.error
 from datetime import datetime
 
 # 原生层崩溃 (OpenCV/摄像头驱动) 无 Python traceback, faulthandler 能打印线程栈定位
@@ -38,6 +39,7 @@ from warehouse.activity import load as load_activity
 from warehouse import ledger
 from warehouse.batch_import import BatchParser
 from warehouse import git_sync
+from warehouse.app_version import VERSION, check_latest_release
 
 # 数据/设置根目录:
 #   打包版 (desktop.py) 通过环境变量 PARTS_APP_DIR 指向 exe 旁目录;
@@ -70,6 +72,15 @@ def activity_path(path: str):
 
 def get_store() -> ExcelStore:
     return app.config.get("STORE") or ExcelStore(get_data_dir())
+
+
+@app.route("/api/update/check")
+def update_check():
+    """Check the public GitHub Release; unrelated to user inventory sync settings."""
+    try:
+        return jsonify({"ok": True, **check_latest_release()})
+    except (OSError, ValueError, urllib.error.URLError, TimeoutError) as exc:
+        return jsonify({"ok": False, "current_version": VERSION, "error": f"无法连接 GitHub Release: {exc}"}), 503
 
 
 def get_ai_cfg() -> dict | None:
@@ -1888,8 +1899,11 @@ def import_commit():
         return jsonify({"error": "未配置 AI 接口"}), 400
     try:
         parser = BatchParser(cfg["api_key"], cfg["base_url"], cfg["model"])
-        result = parser.commit(items, get_data_dir())
-        return jsonify({"ok": True, "result": result, "total": len(items)})
+        committed = parser.commit(items, get_data_dir())
+        details = committed.get("details", [])
+        ledger_entry = ledger.append(get_data_dir(), "录入", details, reason="批量录入", source="import")
+        return jsonify({"ok": True, "result": committed.get("result", {}), "total": len(items),
+                        "record_id": ledger_entry.get("record_id")})
     except Exception as e:
         return jsonify({"error": str(e)[:300]}), 500
 

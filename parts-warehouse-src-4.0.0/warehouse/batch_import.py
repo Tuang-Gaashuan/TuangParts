@@ -945,7 +945,7 @@ name 应填型号或规格值(如 10uF、10kΩ、STM32F103C8T6); 若某列只是
     # ── 批量写入 ────────────────────────────────────────
     def commit(self, items: list, data_dir: str) -> dict:
         """按子分类分组写入 Excel。items: [{name,brand,package,qty,spec,cat_key,subcat}]。
-        返回 {subcat: 写入条数}。"""
+        返回 {subcat: 写入条数} 及本次全部写入明细，供调用方生成一笔账本记录。"""
         from warehouse.excel_store import ExcelStore
         from warehouse.activity import record as record_activity
 
@@ -959,6 +959,7 @@ name 应填型号或规格值(如 10uF、10kΩ、STM32F103C8T6); 若某列只是
             groups.setdefault(key, []).append(it)
 
         result = {}
+        details = []
         for (cat_key, subcat), grp in groups.items():
             if cat_key is None:
                 # 未识别分类: 写入「未分类」区, 用户可手动归类, 不再丢弃
@@ -970,16 +971,32 @@ name 应填型号或规格值(如 10uF、10kΩ、STM32F103C8T6); 若某列只是
                     {"subcat": undo_mod.UNCAT_KEY, "old_rows": old_uncat},
                 ], "批量导入(未分类)")
                 result["未分类"] = result.get("未分类", 0) + len(grp)
+                for item in grp:
+                    qty = int(float(str(item.get("qty", 0) or 0)))
+                    details.append({"subcat": "未分类", "name": item.get("name", ""), "delta": qty,
+                                    "quantity_before": 0, "quantity_after": qty})
                 continue
             # 读取现有数据, 与新增合并 (相同元件数量累加, 不产生重复行)
             old_headers, old_rows = store.load(subcat) if subcat else ([], [])
+            running_qty = {}
+            for row in old_rows:
+                key = tuple(str(row[i] if i < len(row) else "") for i in (0, 1, 2, 6))
+                running_qty[key] = running_qty.get(key, 0) + int(float(str(row[3] if len(row) > 3 else 0) or 0))
             new_rows = _merge_rows(old_rows, grp, subcat)
             path = store.save(subcat, headers, new_rows)
             record_activity(data_dir, subcat, old_rows, new_rows, path=path)
             from warehouse import undo as undo_mod
             undo_mod.push(data_dir, [{"subcat": subcat, "old_rows": old_rows}], "批量导入")
             result[subcat or "(未分类)"] = len(grp)
-        return result
+            for item in grp:
+                qty = int(float(str(item.get("qty", 0) or 0)))
+                key = tuple(str(item.get(k, "") or "") for k in ("name", "brand", "package", "spec"))
+                before = running_qty.get(key, 0)
+                after = before + qty
+                running_qty[key] = after
+                details.append({"subcat": subcat or "(未分类)", "name": item.get("name", ""), "delta": qty,
+                                "quantity_before": before, "quantity_after": after})
+        return {"result": result, "details": details}
 
 
 def parse_ai_config(app_dir: str) -> dict:

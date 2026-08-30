@@ -6,14 +6,16 @@
   - 修正错乱写法 (OCR/录入错误, 如 JERR(捷而场) → JIERR(捷而瑞))
   - 非品牌描述清空 (如"中性电容")
 
-用法:  python clean_brands.py [data目录]
-不传 data 目录时自动用 dist/parts-warehouse/data (打包版实际数据)。
+用法:  python tools/maintenance/clean_brands.py [data目录]
+不传 data 目录时自动用工程 data 目录。
 运行前请先备份 (本脚本也会打印备份提示)。
 """
 
 import os
 import sys
 import datetime
+
+PROJECT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
 # ── 规范映射: 原写法 -> 规范名 (含搜索确认依据) ──────────────
 # 备注格式: (规范名, 修正说明)
@@ -144,11 +146,10 @@ KEEP_NAMES = [
 
 def find_data_dir() -> str:
     """定位实际数据目录: 命令行参数 > settings.json 的 data_dir > 默认 data。"""
-    root = os.path.dirname(os.path.abspath(__file__))
     if len(sys.argv) > 1:
         return os.path.abspath(sys.argv[1])
     import json
-    sp = os.path.join(root, "data", "settings.json")
+    sp = os.path.join(PROJECT_DIR, "data", "settings.json")
     if os.path.exists(sp):
         try:
             with open(sp, encoding="utf-8") as f:
@@ -158,7 +159,7 @@ def find_data_dir() -> str:
                 return os.path.abspath(custom)
         except Exception:
             pass
-    return os.path.join(root, "data")
+    return os.path.join(PROJECT_DIR, "data")
 
 
 def clean(data_dir: str) -> dict:

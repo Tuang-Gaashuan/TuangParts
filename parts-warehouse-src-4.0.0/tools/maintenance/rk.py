@@ -21,26 +21,23 @@ import time
 
 logging.getLogger("rapidocr").setLevel(logging.ERROR)   # 抑制 RapidOCR INFO 噪音
 
-# 允许直接以脚本方式运行 (python rk.py)
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# 允许从 tools/maintenance 直接运行，同时导入工程模块。
+PROJECT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+sys.path.insert(0, PROJECT_DIR)
 
 IMG_EXTS = (".png", ".jpg", ".jpeg", ".webp", ".bmp")
 
 
 # ── 数据目录 ────────────────────────────────────────────
 def find_data_dir(app_dir: str) -> str:
-    """数据目录: --app-dir 指定 > 脚本同目录 data/ > dist/parts-warehouse/data (exe 旁真实数据)。"""
+    """数据目录: --app-dir 指定 > 工程种子 data。个人库存必须显式指定。"""
     if app_dir:
         if os.path.isdir(app_dir):
             return app_dir
         print(f"! 指定的数据目录不存在: {app_dir}")
-    base = os.path.dirname(os.path.abspath(__file__))
-    for cand in (os.path.join(base, "data"),
-                 os.path.join(base, "dist", "parts-warehouse", "data")):
-        if os.path.isdir(cand):
-            return cand
-    os.makedirs(os.path.join(base, "data"), exist_ok=True)
-    return os.path.join(base, "data")
+    data_dir = os.path.join(PROJECT_DIR, "data")
+    os.makedirs(data_dir, exist_ok=True)
+    return data_dir
 
 
 # ── AI 配置 (与 app.py get_ai_cfg 同逻辑) ──

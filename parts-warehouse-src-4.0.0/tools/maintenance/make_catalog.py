@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """生成 category_catalog.xlsx (Excel 表一: 全部一级分类 + 子分类层级目录)。
 
-用法: python make_catalog.py
-输出: category_catalog.xlsx (项目根目录), 纯目录用途, 不存元器件。
+用法: python tools/maintenance/make_catalog.py
+输出: docs/reference/category_catalog.xlsx, 纯目录用途, 不存元器件。
 """
 
 import os
@@ -11,8 +11,8 @@ from openpyxl.styles import Font, PatternFill, Alignment
 
 from warehouse.config import CATEGORIES
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-OUT = os.path.join(BASE_DIR, "category_catalog.xlsx")
+BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+OUT = os.path.join(BASE_DIR, "docs", "reference", "category_catalog.xlsx")
 
 HEAD_FILL = PatternFill("solid", fgColor="2563EB")
 HEAD_FONT = Font(color="FFFFFF", bold=True, size=12)

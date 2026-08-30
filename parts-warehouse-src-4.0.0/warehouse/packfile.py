@@ -17,8 +17,8 @@ from warehouse.config import COMMON_FIELDS
 
 # 导出一级分类目录时排除的运行时目录/文件
 RUNTIME_NAMES = {"cache", "backgrounds", "decor", "exports", "backups",
-                 "settings.json", "activity_log.jsonl", "undo_log.jsonl",
-                 "撤回日志", "未分类"}
+                 "settings.json", "activity_log.jsonl", "ledger.jsonl", "undo_log.jsonl",
+                 "撤回日志", "未分类", "BOM清单"}
 
 EXPORT_SUBDIR = "exports"
 BACKUP_ROOT_REL = "backups"     # 项目根下的 backups/ (与 pack.py 一致)
@@ -95,10 +95,20 @@ def export_package(data_dir: str, out_dir: str = "") -> dict:
             zf.write(uncat_path, "未分类/未分类.xlsx")
             subcats += 1
             items += len(rows)
+        # BOM 清单：独立业务数据，原样打包，不能作为库存分类 Excel 处理。
+        from warehouse import bom_lists
+        bom_dir = os.path.join(data_dir, bom_lists.DIR_NAME)
+        bom_lists_exported = 0
+        if os.path.isdir(bom_dir):
+            for fname in sorted(os.listdir(bom_dir)):
+                if fname.lower().endswith(".xlsx"):
+                    zf.write(os.path.join(bom_dir, fname), os.path.join(bom_lists.DIR_NAME, fname))
+                    bom_lists_exported += 1
         # manifest
         manifest = {
-            "app": "元器件仓库", "format_version": 1,
+            "app": "元器件仓库", "format_version": 2,
             "exported_at": ts, "subcats": subcats, "items": items,
+            "bom_lists": bom_lists_exported,
         }
         zf.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
 
@@ -203,12 +213,37 @@ def import_package(data_dir: str, zip_bytes: bytes, project_root: str = "") -> d
                 shutil.copytree(data_dir, backup)
 
             store = ExcelStore(data_dir)
+            from warehouse import bom_lists
+            existing_bom_ids = {item.get("id") for item in bom_lists._all_xlsx(data_dir)}
+            imported_bom_lists = 0
+            skipped_bom_lists = 0
             detail = {}
             total_items = 0
             for rel in files:
                 fp = os.path.join(tmp, rel)
                 parts = rel.split("/")
                 fname = os.path.basename(rel)
+                # BOM 清单是独立的业务 Excel，绝不能按库存表合并或送入未分类。
+                if len(parts) >= 2 and parts[0] == bom_lists.DIR_NAME:
+                    bom_item = bom_lists._read_xlsx(fp)
+                    if not bom_item or not bom_item.get("id"):
+                        detail[f"BOM清单/{fname}(跳过)"] = "不是有效的 BOM 清单"
+                        continue
+                    if bom_item["id"] in existing_bom_ids:
+                        skipped_bom_lists += 1
+                        continue
+                    target_dir = os.path.join(data_dir, bom_lists.DIR_NAME)
+                    os.makedirs(target_dir, exist_ok=True)
+                    target = os.path.join(target_dir, fname)
+                    stem, ext = os.path.splitext(fname)
+                    suffix = 2
+                    while os.path.exists(target):
+                        target = os.path.join(target_dir, f"{stem}_{suffix}{ext}")
+                        suffix += 1
+                    shutil.copy2(fp, target)
+                    existing_bom_ids.add(bom_item["id"])
+                    imported_bom_lists += 1
+                    continue
                 # 撤回日志是操作快照 (undo-*.xlsx), 不是库存数据。
                 # 旧版导出包可能包含该目录, 导入时必须整目录跳过,
                 # 否则快照列 (原分类/原行号/...) 会被错位当成库存行。
@@ -327,4 +362,5 @@ def import_package(data_dir: str, zip_bytes: bytes, project_root: str = "") -> d
                 except Exception as e:
                     detail[f"{subcat}(跳过)"] = str(e)[:60]
             return {"ok": True, "subcats": len(detail), "items": total_items,
+                    "bom_lists": imported_bom_lists, "bom_lists_skipped": skipped_bom_lists,
                     "backup": backup, "detail": detail}

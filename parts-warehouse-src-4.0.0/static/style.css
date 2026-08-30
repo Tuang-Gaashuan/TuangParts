@@ -2,6 +2,42 @@
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
+/* 库存分类专用操作条幅：触发按钮与展开条幅同宽，覆盖内容而不改变表格布局。 */
+.category-actions { position: fixed; top: 24px; right: 24px; width: 128px; z-index: 150; }
+.action-trigger, .action-banner > button {
+  width: 128px; min-height: 38px; border: 1px solid var(--border); border-radius: 7px;
+  padding: 8px 10px; font: inherit; font-size: 13px; font-weight: 700; cursor: pointer;
+}
+.action-trigger {
+  color: var(--text); background: var(--card-bg); border-color: var(--border); box-shadow: var(--shadow);
+}
+.action-trigger:hover { background: var(--input-bg); border-color: var(--blue); }
+.action-banner {
+  display: none; width: 128px; margin-top: 8px; padding: 9px;
+  background: var(--card-bg); border: 1px solid var(--border); border-radius: 7px;
+  box-shadow: var(--shadow);
+}
+.category-actions.open .action-banner { display: grid; gap: 7px; }
+.action-banner > button { width: 108px; min-height: 34px; color: var(--text); background: var(--card-bg); }
+.action-banner > button:hover { background: var(--input-bg); border-color: var(--blue); }
+.action-banner > .banner-danger { color: var(--red, #dc2626); border-color: color-mix(in srgb, var(--red, #dc2626) 48%, var(--border)); }
+.action-banner > .banner-danger:hover { background: color-mix(in srgb, var(--red, #dc2626) 14%, var(--card-bg)); border-color: var(--red, #dc2626); }
+.category-back {
+  position: fixed; right: 24px; bottom: 24px; z-index: 150;
+  min-width: 86px; min-height: 38px; padding: 8px 14px;
+  border: 1px solid var(--border); border-radius: 7px;
+  color: var(--text); background: var(--card-bg); box-shadow: var(--shadow);
+  font: inherit; font-size: 13px; font-weight: 700; cursor: pointer;
+}
+.category-back:hover { background: var(--input-bg); border-color: var(--blue); }
+
+@media (max-width: 640px) {
+  .category-actions { top: 12px; right: 12px; width: 112px; }
+  .action-trigger, .action-banner { width: 112px; }
+  .action-banner > button { width: 92px; font-size: 12px; }
+  .category-back { right: 12px; bottom: 12px; }
+}
+
 .ledger-tools {
   display: flex;
   flex-wrap: wrap;

@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """生成示例数据 (子分类文件模型)。
 
-用法: python seed.py
+用法: python tools/maintenance/seed.py
 为几个子分类填充示例元器件, 其余子分类不建文件。
-再调用 make_catalog.py 生成分类总表。
+再调用 tools/maintenance/make_catalog.py 生成分类总表。
 
 注意: 会清空 data/ 目录, 正式使用后请勿运行。
 """
@@ -13,7 +13,7 @@ import shutil
 from warehouse.config import CATEGORIES, fields_for
 from warehouse.excel_store import ExcelStore
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 DATA_DIR = os.path.join(BASE_DIR, "data")
 
 # 示例数据: 子分类名 -> 行列表

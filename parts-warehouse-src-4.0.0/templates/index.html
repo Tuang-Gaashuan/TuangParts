@@ -53,6 +53,21 @@
   <button id="btnBack"></button>
 </div>
 
+<!-- 仅库存分类详情页显示；展开后覆盖右上方页面内容，不改变表格宽度。 -->
+<div class="category-actions" id="categoryActions" style="display:none">
+  <button class="action-trigger" id="actionTrigger" type="button" onclick="toggleCategoryActions()" aria-expanded="false">操作</button>
+  <div class="action-banner" id="actionBanner" aria-hidden="true">
+    <button type="button" onclick="addRow()">新增行</button>
+    <button class="banner-danger" type="button" onclick="deleteSelectedRows()">删除行</button>
+    <button type="button" onclick="openAIModal()">AI 填入</button>
+    <button type="button" onclick="saveCategory()">保存</button>
+    <button type="button" onclick="mergeSubcat()">合并重复</button>
+    <button type="button" onclick="openStockModal('add')">增加库存</button>
+    <button type="button" onclick="openStockModal('withdraw')">取出</button>
+  </div>
+</div>
+<button class="category-back" id="categoryBack" type="button" onclick="goBack()" style="display:none">返回</button>
+
 <!-- 面包屑 -->
 <div class="crumbs" id="crumbs" style="display:none"></div>
 
@@ -584,7 +599,6 @@
       </div>
     </div>
   </section>
-</main>
 
 <!-- 状态提示 -->
 <div class="toast" id="toast"></div>
@@ -645,6 +659,7 @@
       <div class="tab2" id="setTabUI" onclick="switchSetTab('ui')">🎨 界面设置</div>
       <div class="tab2" id="setTabData" onclick="switchSetTab('data')">🗑 数据管理</div>
       <div class="tab2" id="setTabGit" onclick="switchSetTab('git')">🌐 线上同步</div>
+      <div class="tab2" id="setTabAbout" onclick="switchSetTab('about')">ⓘ 关于</div>
     </div>
 
     <!-- Tab1: 数据路径 -->
@@ -803,7 +818,7 @@
         <div class="input-field">
           <label>本地同步目录</label>
           <div class="dir-row">
-            <input type="text" id="giteeCfgLocal" placeholder="例如 C:\Users\DJX\AppData\Local\parts-warehouse-sync">
+            <input type="text" id="giteeCfgLocal" placeholder="例如 C:\Users\&lt;用户名&gt;\AppData\Local\parts-warehouse-sync">
             <button class="btn btn-ghost" onclick="browseGitDir('giteeCfgLocal')">📁 浏览…</button>
           </div>
         </div>
@@ -837,7 +852,7 @@
         <div class="input-field">
           <label>本地同步目录</label>
           <div class="dir-row">
-            <input type="text" id="gitCfgLocal" placeholder="例如 C:\Users\DJX\AppData\Local\parts-warehouse-sync">
+            <input type="text" id="gitCfgLocal" placeholder="例如 C:\Users\&lt;用户名&gt;\AppData\Local\parts-warehouse-sync">
             <button class="btn btn-ghost" onclick="browseGitDir('gitCfgLocal')">📁 浏览…</button>
           </div>
         </div>
@@ -900,10 +915,27 @@
           <input type="text" id="pkgOutDir" placeholder="导出位置（留空 = data\exports\）">
           <button class="btn btn-ghost" onclick="browsePkgDir()">📁 浏览…</button>
         </div>
-        <div class="file-hint" id="pkgStatus">导出 = 全部元件打包成 ZIP；导入 = 合并进当前仓库（导入前自动备份，同名元件自动合并数量）</div>
+        <div class="file-hint" id="pkgStatus">导出 = 全部库存、未分类与 BOM 清单打包成 ZIP；导入 = 库存合并进当前仓库、BOM 清单按清单 ID 恢复（同 ID 不重复导入），导入前自动备份</div>
       </div>
 
       <div class="ai-status" id="setDataStatus"></div>
+    </div>
+
+    <!-- Tab6: 关于 -->
+    <div id="setPanelAbout" style="display:none">
+      <div class="input-field">
+        <label>TuangParts</label>
+        <p class="hint">作者：Tuang</p>
+        <p class="hint">面向电子元器件库存、BOM 匹配和清单管理的本地工具。希望它能让每一次录入、取出和查找都更清楚、更省心。</p>
+        <p class="hint">软件仍在持续完善，可能存在未发现的 Bug 或体验不足。感谢使用，也祝你的每个项目都能顺利落地。</p>
+      </div>
+      <div class="input-field" style="margin-top:18px">
+        <label>软件更新</label>
+        <div class="modal-actions">
+          <button class="btn btn-ghost" id="updateCheckBtn" onclick="checkAppUpdate()">检测 GitHub 新版本</button>
+        </div>
+        <div class="file-hint" id="updateStatus">当前版本检测中…</div>
+      </div>
     </div>
 
     <div class="modal-actions" style="margin-top:18px">
@@ -945,6 +977,7 @@
     </div>
   </section>
 
+</main>
 <script src="/static/app.js"></script>
 
 <!-- 背景效果放大预览弹窗 (模拟主界面: 图片填充 + 卡片透明度) -->

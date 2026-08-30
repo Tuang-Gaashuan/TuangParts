@@ -7,6 +7,5 @@
 #   rk --no-ai             # 纯规则解析, 无需 AI/key/网络 (适合固定格式料袋)
 #   rk -y                  # 跳过确认
 set -e
-PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
-cd "$PROJECT_DIR"
-exec python rk.py "$@"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+exec python "$SCRIPT_DIR/rk.py" "$@"

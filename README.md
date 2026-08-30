@@ -11,17 +11,20 @@
 
 | 版本 | 源码 | 说明 |
 | --- | --- | --- |
-| **4.0.1（最新）** | [parts-warehouse-src-4.0.0/](parts-warehouse-src-4.0.0/) | Codex 风格工作区 + 全库搜索 + 数据包导入分类修复 + **0 数量元器件修复** |
-| 4.0.0 | 同 4.0.1 源码目录 | Codex 风格工作区 + 全库搜索 + 数据包导入分类修复 |
+| **4.0.2（最新）** | [parts-warehouse-src-4.0.0/](parts-warehouse-src-4.0.0/) | 关于与 GitHub 版本检测 + BOM 清单独立迁移 + 搜索/品牌库/账本修复 + 工程整理 |
+| 4.0.1 | 同 4.0.2 源码目录 | 0 数量元器件修复 |
+| 4.0.0 | 同 4.0.2 源码目录 | Codex 风格工作区 + 全库搜索 + 数据包导入分类修复 |
 | 3.0.0 | [parts-warehouse-src/](parts-warehouse-src/) | 品牌库 + 数据清洗 + 账本体系（历史版本） |
 
-> 4.0.1 为 4.0.0 的修复版：v4.0.0 上传后立即发现「0 数量元器件」数据 bug 并修复（列错位导致的历史脏数据清理 + 全路径数量防线）。发布版 exe / zip 走 GitHub Releases（带版本号），不入仓库。
+> 4.0.2 为持续改进版：集中“关于/版本检测”，完善 BOM 清单独立数据包迁移、库存账本记录及搜索/品牌库体验。发布版 exe / zip 走 GitHub Releases（带版本号），不入仓库。
 
-## 📖 使用说明书（4.0.0 完整版）
+## 📚 文档与 AI 技能
 
-[点击查看《使用说明书》](parts-warehouse-src-4.0.0/使用说明书.md)
-
-涵盖全部功能：库存管理、存入/取出、BOM 匹配与清单、全库搜索、账本与撤回、品牌库、线上同步、数据包备份迁移、36 个分类体系介绍、设置详解（数据路径 / AI / 界面 / 数据管理 / 线上同步）及从首版至今的更新记录。
+| 文档 | 说明 |
+| --- | --- |
+| [《使用说明书》](parts-warehouse-src-4.0.0/使用说明书.md) | 完整功能手册：库存管理、存入/取出、BOM 匹配与清单、全库搜索、账本与撤回、品牌库、线上同步、数据包备份迁移、36 个分类体系介绍、设置详解、更新记录 |
+| [《线上同步指导手册》](parts-warehouse-src-4.0.0/线上同步指导手册.md) | Gitee / GitHub 数据仓库创建 + 软件内同步设置 + Windows 凭据配置 + 首次跑通流程 + FAQ |
+| [AI 技能 parts-warehouse-sync-setup](parts-warehouse-src-4.0.0/skills/parts-warehouse-sync-setup/SKILL.md) | 分享用 SKILL.md：AI 按它执行「数据仓库创建 + 软件内线上同步设置」（含验证步骤与常见坑），可复制进 AI 客户端的 skills 目录使用 |
 
 ## 🆕 4.0.0 更新介绍
 
@@ -57,7 +60,7 @@
 
 ### 方式一：直接下载打包版（推荐）
 
-从 [Releases](https://github.com/Tuang-Gaashuan/TuangParts/releases) 下载 `parts-warehouse-4.0.1-windows.zip`（目录版 + 单文件版）或 `parts-warehouse-4.0.1.exe`，双击即用：
+从 [Releases](https://github.com/Tuang-Gaashuan/TuangParts/releases) 下载 `parts-warehouse-4.0.2-windows.zip`（目录版 + 单文件版）或 `parts-warehouse-4.0.2.exe`，双击即用：
 
 - 首次运行会在 exe 旁边自动生成 `data\` 目录（含示例数据）
 - 数据永远在 `data\` 目录，重装、重打包都不丢数据
@@ -71,7 +74,7 @@
 git clone https://github.com/Tuang-Gaashuan/TuangParts.git
 cd parts-warehouse/parts-warehouse-src-4.0.0
 pip install -r requirements.txt
-python seed.py      # 可选：生成示例数据（会清空 data/，正式使用后勿跑）
+python tools/maintenance/seed.py  # 可选：生成示例数据（会清空 data/，正式使用后勿跑）
 python desktop.py   # 桌面窗口版
 # 或
 python app.py       # 纯浏览器版 (http://127.0.0.1:5000)

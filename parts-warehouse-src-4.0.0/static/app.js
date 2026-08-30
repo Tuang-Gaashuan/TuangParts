@@ -61,6 +61,30 @@ function hideAllPages() {
   }
 }
 
+function setCategoryActions(visible) {
+  const actions = document.getElementById("categoryActions");
+  if (!actions) return;
+  actions.style.display = visible ? "" : "none";
+  if (!visible) {
+    actions.classList.remove("open");
+    document.getElementById("actionTrigger").setAttribute("aria-expanded", "false");
+    document.getElementById("actionBanner").setAttribute("aria-hidden", "true");
+  }
+}
+
+function setCategoryBack(visible) {
+  const back = document.getElementById("categoryBack");
+  if (back) back.style.display = visible ? "" : "none";
+}
+
+function toggleCategoryActions() {
+  const actions = document.getElementById("categoryActions");
+  if (!actions || actions.style.display === "none") return;
+  const open = actions.classList.toggle("open");
+  document.getElementById("actionTrigger").setAttribute("aria-expanded", String(open));
+  document.getElementById("actionBanner").setAttribute("aria-hidden", String(!open));
+}
+
 async function checkGitBeforeInventory(page) {
   // 页面浏览不再触发网络同步；保留此函数名兼容 Git 页面之外的旧调用。
   return true;
@@ -92,6 +116,8 @@ async function render(page, push = true) {
   document.getElementById("btnBack").style.display =
     page === "home" ? "none" : "";
   hideToolbar(["searchBox", "btnNew", "btnAI", "btnSave", "btnMerge", "btnAddStock", "btnWithdrawStock"]);
+  setCategoryActions(false);
+  setCategoryBack(page === "categories" || page.startsWith("category:") || page.startsWith("subcat:") || page === "brands" || page.startsWith("brand:"));
   hideAllPages();
   setCrumbs("");
 
@@ -1225,12 +1251,8 @@ async function renderSubcat(name) {
   currentSubcat = name;
   document.getElementById("detailPage").style.display = "";
   document.getElementById("searchBox").style.display = "";
-  document.getElementById("btnNew").style.display = "";
-  document.getElementById("btnAI").style.display = "";
-  document.getElementById("btnSave").style.display = "";
-  document.getElementById("btnMerge").style.display = "";
-  document.getElementById("btnAddStock").style.display = "";
-  document.getElementById("btnWithdrawStock").style.display = "";
+  document.getElementById("btnBack").style.display = "none";
+  setCategoryActions(true);
   document.getElementById("searchBox").value = "";
 
   const data = await api(`/api/subcat?name=${encodeURIComponent(name)}`);
@@ -1394,6 +1416,19 @@ function addRow() {
   renderTable();
   const rows = document.querySelectorAll("#tableBody tr");
   if (rows.length) rows[rows.length - 1].scrollIntoView({ block: "nearest" });
+}
+
+function deleteSelectedRows() {
+  const indices = selectedTableRows();
+  if (!indices.length) {
+    showToast("请先勾选要删除的元件行");
+    return;
+  }
+  if (!confirm(`将从当前表格移除 ${indices.length} 行。点击「保存」后才会写入库存文件。\n确定继续？`)) return;
+  const selected = new Set(indices);
+  currentItems = currentItems.filter((_, index) => !selected.has(index));
+  renderTable();
+  showToast(`已删除 ${indices.length} 行，请点击「保存」确认写入`);
 }
 
 async function saveCategory() {
@@ -2330,7 +2365,7 @@ function closeAIConfig() {
 }
 
 function switchSetTab(tab) {
-  const map = { path: "setTabPath", ai: "setTabAI", ui: "setTabUI", data: "setTabData", git: "setTabGit" };
+  const map = { path: "setTabPath", ai: "setTabAI", ui: "setTabUI", data: "setTabData", git: "setTabGit", about: "setTabAbout" };
   for (const [k, id] of Object.entries(map)) {
     document.getElementById(id).className = "tab2" + (k === tab ? " active" : "");
   }
@@ -2339,6 +2374,7 @@ function switchSetTab(tab) {
   document.getElementById("setPanelUI").style.display = tab === "ui" ? "" : "none";
   document.getElementById("setPanelData").style.display = tab === "data" ? "" : "none";
   document.getElementById("setPanelGit").style.display = tab === "git" ? "" : "none";
+  document.getElementById("setPanelAbout").style.display = tab === "about" ? "" : "none";
   if (tab === "data") loadDataStat();
 }
 
@@ -2484,7 +2520,7 @@ async function exportPackage() {
     });
     if (!r.ok) { statusEl.textContent = `❌ ${r.error}`; return; }
     statusEl.textContent =
-      `✅ 已导出 ${r.subcats} 个子分类 / ${r.items} 条 → ${r.path}`;
+      `✅ 已导出 ${r.subcats} 个子分类 / ${r.items} 条${r.bom_lists ? ` / ${r.bom_lists} 份 BOM 清单` : ""} → ${r.path}`;
     showToast(`数据包已导出: ${r.path}`);
   } catch (e) {
     statusEl.textContent = `❌ 导出失败: ${e.message}`;
@@ -2511,6 +2547,8 @@ async function importPackage() {
     const data = await res.json();
     if (!data.ok) { statusEl.textContent = `❌ ${data.error}`; return; }
     let lines = [`✅ 导入完成：${data.subcats} 个子分类，净增 ${data.items} 条`];
+    if (data.bom_lists) lines.push(`恢复 ${data.bom_lists} 份 BOM 清单`);
+    if (data.bom_lists_skipped) lines.push(`跳过 ${data.bom_lists_skipped} 份已有 BOM 清单`);
     if (data.backup) lines.push(`导入前已自动备份 → ${data.backup}`);
     const skips = Object.entries(data.detail || {}).filter(([k]) => String(k).includes("跳过"));
     if (skips.length) lines.push(`⚠ ${skips.length} 个子分类跳过: ${skips.map(([k]) => k).join("、")}`);
@@ -2521,6 +2559,31 @@ async function importPackage() {
     statusEl.textContent = `❌ 导入失败: ${e.message}`;
   } finally {
     input.value = "";
+  }
+}
+
+async function checkAppUpdate() {
+  const button = document.getElementById("updateCheckBtn");
+  const status = document.getElementById("updateStatus");
+  button.disabled = true;
+  status.textContent = "正在检查 GitHub 最新正式版本…";
+  try {
+    const data = await api("/api/update/check");
+    if (!data.ok) throw new Error(data.error || "检测失败");
+    const published = data.published_at ? new Date(data.published_at).toLocaleDateString("zh-CN") : "";
+    if (data.has_update) {
+      const names = (data.assets || []).map((asset) => asset.name).join("、");
+      status.innerHTML = `发现新版本：<b>v${data.latest_version}</b>（当前 v${data.current_version}）${published ? `，发布于 ${published}` : ""}。` +
+        `<a href="${data.release_url}" target="_blank" rel="noopener">查看发布页</a>${names ? `；可下载：${names}` : ""}`;
+    } else if (data.is_newer_than_release) {
+      status.textContent = `当前为开发版 v${data.current_version}，GitHub 最新发布为 v${data.latest_version}`;
+    } else {
+      status.textContent = `已是最新版本：v${data.current_version}${published ? `（GitHub 发布于 ${published}）` : ""}`;
+    }
+  } catch (e) {
+    status.textContent = `检测失败：${e.message}`;
+  } finally {
+    button.disabled = false;
   }
 }
 
@@ -2854,10 +2917,21 @@ async function testAIConfig() {
 // 启动时探测可用摄像头列表
 loadCameraList();
 
-// 点击遮罩关闭
-document.getElementById("aiConfigModal").addEventListener("click", (e) => {
-  if (e.target.id === "aiConfigModal") closeAIConfig();
-});
+// 设置遮罩只接受空白处的直接点击；拖动、选中文本和滑块操作不能误关设置。
+(() => {
+  const modal = document.getElementById("aiConfigModal");
+  let overlayPress = null;
+  modal.addEventListener("pointerdown", (event) => {
+    overlayPress = event.target === modal ? { x: event.clientX, y: event.clientY, pointerId: event.pointerId } : null;
+  });
+  modal.addEventListener("pointerup", (event) => {
+    if (!overlayPress || event.target !== modal || event.pointerId !== overlayPress.pointerId) return;
+    const moved = Math.hypot(event.clientX - overlayPress.x, event.clientY - overlayPress.y);
+    if (moved <= 6) closeAIConfig();
+    overlayPress = null;
+  });
+  modal.addEventListener("pointercancel", () => { overlayPress = null; });
+})();
 
 // ── 品牌库 (品牌 / 采购量 / 经营的元器件类别) ──────────
 let brandAll = [];          // 品牌聚合列表缓存 (搜索过滤用)
@@ -3008,10 +3082,12 @@ function goWorkspaceSearch(query = "", keepSidebarFocus = false) {
 }
 
 async function renderWorkspaceSearch() {
+  const page = document.getElementById("workspaceSearchPage");
   const input = document.getElementById("workspaceSearchInput");
   const state = document.getElementById("workspaceSearchState");
   const results = document.getElementById("workspaceSearchResults");
-  if (!input || !state || !results) return;
+  if (!page || !input || !state || !results) return;
+  page.style.display = "";
   if (input._bound !== true) {
     input.addEventListener("input", () => searchWorkspace(input.value));
     input._bound = true;
@@ -3037,7 +3113,18 @@ async function searchWorkspace(value) {
   const items = data.items || [];
   state.textContent = items.length ? `找到 ${data.total} 条结果` : "没有找到匹配的库存记录";
   results.innerHTML = items.map((it, index) => `<button class="workspace-search-result" type="button" data-search-index="${index}"><span class="workspace-search-result-main"><b>${escHtml(it.name || "未命名")}</b><small>${escHtml(it.brand)} · ${escHtml(it.package)}</small></span><span class="workspace-search-result-meta"><b>${escHtml(it.qty || "0")} 件</b><small>${escHtml(it.category)} / ${escHtml(it.subcat)} · ${escHtml(it.location)}</small></span></button>`).join("");
-  results.querySelectorAll(".workspace-search-result").forEach((el, index) => el.addEventListener("click", () => goSubcat(items[index].subcat)));
+  results.querySelectorAll(".workspace-search-result").forEach((el, index) => el.addEventListener("click", () => openWorkspaceSearchResult(items[index])));
+}
+
+async function openWorkspaceSearchResult(item) {
+  const overview = await api("/api/overview");
+  const category = (overview.cards || []).find((card) => card.name === item.category);
+  if (!category) {
+    showToast(`无法定位分类：${item.category || "未分类"}`);
+    return;
+  }
+  currentCatKey = category.key;
+  await render(`subcat:${item.subcat}`);
 }
 
 document.addEventListener("keydown", (event) => {

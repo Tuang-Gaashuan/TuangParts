@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """为 36 个一级分类生成扁平图标 (cogview-4), 存到 static/icons/<key>.png。
 
-用法: python generate_icons.py [key]   # 不带参数生成全部
+用法: python tools/maintenance/generate_icons.py [key]   # 不带参数生成全部
 """
 
 import json
@@ -14,7 +14,8 @@ import urllib.error
 from warehouse.config import CATEGORIES
 
 KEY = "4b03215f4d164073bda2231f03e05dd7.37CPzMSQldwiy2wQ"
-OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "icons")
+PROJECT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+OUT_DIR = os.path.join(PROJECT_DIR, "static", "icons")
 os.makedirs(OUT_DIR, exist_ok=True)
 
 # 每个分类的图标描述 (英文, cogview 对英文理解更好)

@@ -48,7 +48,7 @@
 git clone https://github.com/<你的仓库地址>.git
 cd parts-warehouse
 pip install -r requirements.txt
-python seed.py      # 可选：生成示例数据（会清空 data/，正式使用后勿跑）
+python tools/maintenance/seed.py  # 可选：生成示例数据（会清空 data/，正式使用后勿跑）
 python desktop.py   # 桌面窗口版
 # 或
 python app.py       # 纯浏览器版 (http://127.0.0.1:5000)
@@ -61,7 +61,7 @@ Windows 下直接双击 `start.bat` 也可（源码版入口）。
 
 ## 多人联网库存协作研究
 
-当前已完成在线文档/在线表格/Git 增量事件同步方案调研，详细结论见 `在线库存协作研究.md`。日志库、Excel 与 JSON 事件之间的字段和转换约定见 `Excel-JSON转换手册.md`。目前仅完成研究和基础模块整理，没有连接正式云端账号，也没有修改库存数据。
+当前已完成在线文档/在线表格/Git 增量事件同步方案调研，详细结论见 `docs/research/在线库存协作研究.md`。日志库、Excel 与 JSON 事件之间的字段和转换约定见 `docs/reference/Excel-JSON转换手册.md`。目前仅完成研究和基础模块整理，没有连接正式云端账号，也没有修改库存数据。
 
 Git 方案定位为“共同初始 data + 增量库存事件 + 启动时同步”，Git 保存每次独立事件，不保存多人覆盖后的完整库存表。Windows 客户端通过本地 Git 副本执行 `fetch`，根据同步游标读取新增 `events/<日期>/<event_id>.json`，校验并重放后更新本地库存；真正库存扣减仍需要 Flask 业务层做版本和数量校验。
 
@@ -203,7 +203,7 @@ data/
 
 - 一级分类 = 一个 Excel 文件；子分类 = 行内的「子分类」字段
 - 同名子分类出现在多个一级分类下时共享同一份物理文件（如「磁珠」同时归属 电感 和 滤波器）
-- 新增/修改分类后，用 `python make_catalog.py` 重新生成《category_catalog.xlsx》（纯目录参考，不存元件）
+- 新增/修改分类后，用 `python tools/maintenance/make_catalog.py` 重新生成 `docs/reference/category_catalog.xlsx`（纯目录参考，不存元件）
 
 ## 打包发布
 
@@ -213,7 +213,7 @@ python pack.py        # 一键打包 (自动备份数据 → 关闭旧实例 →
 
 产物：`dist/parts-warehouse/parts-warehouse.exe`（数据在 exe 旁，打包不动数据）。
 打包前注意：`parts_warehouse.spec` 会把 `data/` 一起打进包内作为示例种子，
-如需发布纯净分享版，先清空 `data/`（或运行 `seed.py`）再打包。
+如需发布纯净分享版，先清空 `data/`（或运行 `tools/maintenance/seed.py`）再打包。
 
 ## 目录结构
 
@@ -221,17 +221,16 @@ python pack.py        # 一键打包 (自动备份数据 → 关闭旧实例 →
 parts-warehouse/
 ├── app.py               # Web 服务 (Flask 后端 + 全部 API)
 ├── desktop.py           # 桌面版入口 (pywebview 原生窗口)
-├── main.py              # 旧版 tkinter 入口 (功能已迁移 Web, 仅保留)
-├── rk.py                # 拍照/图片入库 CLI
-├── seed.py              # 生成示例数据
-├── make_catalog.py      # 生成 category_catalog.xlsx
 ├── pack.py              # 一键打包脚本 (数据安全版)
 ├── requirements.txt     # 依赖
-├── parts_warehouse.spec # PyInstaller 打包配置
+├── parts_warehouse*.spec# PyInstaller 打包配置
 ├── start.bat            # 源码版一键启动
 ├── data/                # 元器件数据 (不入 git)
 ├── templates/index.html # 前端页面
 ├── static/              # 前端样式与逻辑 (style.css / app.js / icons)
+├── tools/maintenance/   # 生成种子、分类表、OCR CLI 等维护脚本
+├── docs/                # 使用说明、参考资料、研究与更新历史
+├── artifacts/           # 构建缓存、历史发布包和已归档旧原型
 └── warehouse/           # 后端核心
     ├── config.py        # 分类与字段定义
     ├── excel_store.py   # Excel 读写
